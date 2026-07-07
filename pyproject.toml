@@ -9,7 +9,16 @@ dependencies = [
     "jsonschema>=4.21",
 ]
 
+[project.scripts]
+quant-desk = "quant_platform.cli:main"
+
 [project.optional-dependencies]
+desk = [
+    "langgraph>=0.4",
+    "langchain-anthropic>=0.3",
+    "langchain-openai>=0.3",
+    "typing-extensions>=4.12",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
