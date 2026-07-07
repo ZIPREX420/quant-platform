@@ -1,5 +1,4 @@
 """Unit tests for OpenBBClient against a mock transport (no network, no openbb)."""
-import json
 from datetime import date
 
 import httpx
@@ -77,3 +76,27 @@ def test_health_false_on_connect_error():
         raise httpx.ConnectError("refused")
     with client_with(handler) as c:
         assert c.health() is False
+
+
+def test_index_and_currency_share_normalization():
+    seen_paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        return httpx.Response(200, json=GOOD_PAYLOAD)
+
+    with client_with(handler) as c:
+        idx = c.index_historical("^GSPC", date(2026, 1, 1), date(2026, 1, 2))
+        fx = c.currency_historical("EURUSD", date(2026, 1, 1), date(2026, 1, 2))
+    assert seen_paths == [
+        "/api/v1/index/price/historical",
+        "/api/v1/currency/price/historical",
+    ]
+    assert idx.last_close == 11 and fx.last_close == 11
+    assert idx.symbol == "^GSPC" and fx.symbol == "EURUSD"
+
+
+def test_index_error_paths_match_crypto():
+    with client_with(lambda r: httpx.Response(200, json={"results": []})) as c:
+        with pytest.raises(OpenBBClientError, match="no data"):
+            c.index_historical("^GSPC", date(2026, 1, 1), date(2026, 1, 2))
