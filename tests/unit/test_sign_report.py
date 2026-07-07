@@ -32,7 +32,8 @@ def test_block_matches_loader_expectations(tmp_path):
 
 
 def test_report_outside_workspace_rejected(tmp_path):
-    ws = tmp_path / "ws"; ws.mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
     outside = tmp_path / "elsewhere.md"
     outside.write_text("x", encoding="utf-8")
     with pytest.raises(ValueError, match="not inside workspace root"):
