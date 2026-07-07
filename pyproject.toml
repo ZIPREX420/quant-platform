@@ -11,6 +11,7 @@ dependencies = [
 
 [project.scripts]
 quant-desk = "quant_platform.cli:main"
+quant-desk-outcomes = "quant_platform.cli_outcomes:main"
 
 [project.optional-dependencies]
 desk = [
