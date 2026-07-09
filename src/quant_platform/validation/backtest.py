@@ -37,6 +37,7 @@ class BacktestTrade:
     exit_price: float
     return_fraction: float  # net of fees and slippage
     forced_exit: bool = False
+    stopped_out: bool = False
 
     def as_trade(self) -> Trade:
         return Trade(return_fraction=self.return_fraction)
@@ -153,10 +154,21 @@ def run_backtest(
     bars: list[Bar],
     fee_rate: float = 0.001,
     slippage_rate: float = 0.0005,
+    stop_loss_pct: float | None = None,
 ) -> list[BacktestTrade]:
-    """Execute the strategy definition's `signal` object over daily bars."""
+    """Execute the strategy definition's `signal` object over bars.
+
+    stop_loss_pct comes from the definition's `risk` block (single source of
+    truth - the M6 v0.1.0 failure was validating rules without the declared
+    stop). Stop handling is intra-bar and conservative:
+    - triggered when bar.low touches the stop level;
+    - gap-through: if the bar OPENS below the stop, fill at the open (worse);
+    - a stop and a rule-exit in the same window: the stop wins (pessimistic).
+    """
     if signal.get("kind") != "declarative-rules":
         raise RuleError(f"unsupported signal kind: {signal.get('kind')}")
+    if stop_loss_pct is not None and not 0 < stop_loss_pct < 100:
+        raise ValueError(f"stop_loss_pct out of range: {stop_loss_pct}")
     if len(bars) < 3:
         return []
     entries = _all_true(signal["entry_rules"], bars)
@@ -166,40 +178,46 @@ def run_backtest(
     in_position = False
     entry_price = 0.0
     entry_date = ""
-    for i in range(len(bars) - 1):  # signal at close i -> fill at open i+1
-        next_open = bars[i + 1].open
-        if not in_position and entries[i]:
-            entry_price = next_open * (1 + slippage_rate)
-            entry_date = bars[i + 1].date
-            in_position = True
-        elif in_position and exits[i]:
-            exit_price = next_open * (1 - slippage_rate)
-            # entry fee shrinks invested capital; exit fee shrinks proceeds
-            net = (exit_price / entry_price) * (1 - fee_rate) * (1 - fee_rate)
-            trades.append(
-                BacktestTrade(
-                    entry_date=entry_date,
-                    exit_date=bars[i + 1].date,
-                    entry_price=round(entry_price, 8),
-                    exit_price=round(exit_price, 8),
-                    return_fraction=round(net - 1.0, 8),
-                )
-            )
-            in_position = False
-    if in_position:
-        last = bars[-1]
-        exit_price = last.open * (1 - slippage_rate)
+    stop_level = 0.0
+
+    def close_position(exit_price: float, exit_date: str, stopped: bool, forced: bool = False):
         net = (exit_price / entry_price) * (1 - fee_rate) * (1 - fee_rate)
         trades.append(
             BacktestTrade(
                 entry_date=entry_date,
-                exit_date=last.date,
+                exit_date=exit_date,
                 entry_price=round(entry_price, 8),
                 exit_price=round(exit_price, 8),
                 return_fraction=round(net - 1.0, 8),
-                forced_exit=True,
+                forced_exit=forced,
+                stopped_out=stopped,
             )
         )
+
+    for i in range(len(bars) - 1):  # signal at close i -> fill at open i+1
+        nxt = bars[i + 1]
+        if in_position and stop_loss_pct is not None:
+            # stop is checked on the NEXT bar before any rule-exit fill
+            if nxt.open <= stop_level:  # gapped through the stop
+                close_position(nxt.open * (1 - slippage_rate), nxt.date, stopped=True)
+                in_position = False
+                continue
+            if nxt.low <= stop_level:  # touched intra-bar
+                close_position(stop_level * (1 - slippage_rate), nxt.date, stopped=True)
+                in_position = False
+                continue
+        if not in_position and entries[i]:
+            entry_price = nxt.open * (1 + slippage_rate)
+            entry_date = nxt.date
+            in_position = True
+            if stop_loss_pct is not None:
+                stop_level = entry_price * (1 - stop_loss_pct / 100.0)
+        elif in_position and exits[i]:
+            close_position(nxt.open * (1 - slippage_rate), nxt.date, stopped=False)
+            in_position = False
+    if in_position:
+        last = bars[-1]
+        close_position(last.open * (1 - slippage_rate), last.date, stopped=False, forced=True)
     return trades
 
 
