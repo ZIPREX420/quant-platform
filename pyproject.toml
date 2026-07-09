@@ -13,6 +13,7 @@ dependencies = [
 quant-desk = "quant_platform.cli:main"
 quant-desk-outcomes = "quant_platform.cli_outcomes:main"
 quant-validate-trades = "quant_platform.validation.cli:main"
+quant-status = "quant_platform.monitoring.status:main"
 
 [project.optional-dependencies]
 desk = [
