@@ -1,0 +1,62 @@
+{
+  "id": "btcusdt-1h-ema-trend",
+  "version": "0.1.0",
+  "description": "EMA 60/240 cross on BTCUSDT 1h, long-only, 5% hard stop. VALIDATION VERDICT v0.1.0 (2026-07-09): FAIL - OOS Sharpe 0.31 (<0.5), walk-forward worst window -21% (<-15% floor), MC p05 drawdown -79%. See docs/validation/btcusdt-1h-ema-trend-v0.1.0.md. OOS burned for this candidate family. Not loadable: validation_report below is a placeholder.",
+  "universe": {
+    "symbols": [
+      "BTC-USDT"
+    ],
+    "exchanges": [
+      "binance-spot-paper"
+    ]
+  },
+  "signal": {
+    "kind": "declarative-rules",
+    "parameters": {
+      "fast": 60,
+      "slow": 240
+    },
+    "entry_rules": [
+      {
+        "indicator": "ema",
+        "window": 60,
+        "operator": "crosses_above",
+        "operand": {
+          "indicator": "ema",
+          "window": 240
+        }
+      }
+    ],
+    "exit_rules": [
+      {
+        "indicator": "ema",
+        "window": 60,
+        "operator": "crosses_below",
+        "operand": {
+          "indicator": "ema",
+          "window": 240
+        }
+      }
+    ]
+  },
+  "risk": {
+    "max_position_pct_equity": 10,
+    "stop_loss_pct": 5,
+    "max_gross_exposure_pct": 50,
+    "max_daily_loss_pct": 2
+  },
+  "data_dependencies": [
+    {
+      "series": "ohlcv",
+      "frequency": "1h",
+      "lookback_bars": 300
+    }
+  ],
+  "validation_report": {
+    "path": "docs/validation/btcusdt-1h-ema-trend-v0.1.0.md",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "signed_off_by": "FAILED-VALIDATION-SEE-REPORT",
+    "signed_off_date": "2026-07-09",
+    "result": "pass"
+  }
+}
