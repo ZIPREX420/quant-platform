@@ -1,18 +1,42 @@
 {
   "id": "example-btc-trend",
   "version": "0.1.0",
-  "description": "Example strategy definition demonstrating the ADR-0005 contract shape. NOT validated for trading: the validation_report below is a placeholder shape for schema testing only and refers to no real backtest.",
-  "universe": { "symbols": ["BTC-USD"], "exchanges": ["paper"] },
+  "description": "Example strategy definition demonstrating the ADR-0005 contract shape. VALIDATION VERDICT v0.1.0 (2026-07-09): FAIL - see docs/validation/example-btc-trend-v0.1.0.md (evidence floor 10<100 trades; MC drawdown vs caps; declared stop_loss_pct not modeled by the rules). Not loadable by design: the validation_report below remains the schema-testing placeholder.",
+  "universe": {
+    "symbols": [
+      "BTC-USD"
+    ],
+    "exchanges": [
+      "paper"
+    ]
+  },
   "signal": {
     "kind": "declarative-rules",
-    "parameters": { "fast": 50, "slow": 200 },
+    "parameters": {
+      "fast": 50,
+      "slow": 200
+    },
     "entry_rules": [
-      { "indicator": "sma", "window": 50, "operator": "crosses_above",
-        "operand": { "indicator": "sma", "window": 200 } }
+      {
+        "indicator": "sma",
+        "window": 50,
+        "operator": "crosses_above",
+        "operand": {
+          "indicator": "sma",
+          "window": 200
+        }
+      }
     ],
     "exit_rules": [
-      { "indicator": "sma", "window": 50, "operator": "crosses_below",
-        "operand": { "indicator": "sma", "window": 200 } }
+      {
+        "indicator": "sma",
+        "window": 50,
+        "operator": "crosses_below",
+        "operand": {
+          "indicator": "sma",
+          "window": 200
+        }
+      }
     ]
   },
   "risk": {
@@ -22,7 +46,11 @@
     "max_daily_loss_pct": 2
   },
   "data_dependencies": [
-    { "series": "ohlcv", "frequency": "1d", "lookback_bars": 250 }
+    {
+      "series": "ohlcv",
+      "frequency": "1d",
+      "lookback_bars": 250
+    }
   ],
   "validation_report": {
     "path": "docs/validation/example-btc-trend-v0.1.0.md",
