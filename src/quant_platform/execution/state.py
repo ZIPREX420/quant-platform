@@ -55,6 +55,7 @@ class PaperState(BaseModel):
     cycle_count: int = Field(default=0, ge=0)
     day_anchor_date: str | None = None  # UTC date of the daily kill-switch anchor
     day_anchor_equity: float | None = Field(default=None, gt=0)
+    last_equity: float | None = Field(default=None, gt=0)  # equity at last cycle's mark prices
 
     def restore_account(self) -> PaperAccount:
         account = PaperAccount(starting_cash=self.starting_cash)
@@ -78,6 +79,7 @@ class PaperState(BaseModel):
         cycle_count: int,
         day_anchor_date: str | None = None,
         day_anchor_equity: float | None = None,
+        last_equity: float | None = None,
     ) -> "PaperState":
         # engine metadata and account book must agree - refuse divergence
         for pos in open_positions:
@@ -96,6 +98,7 @@ class PaperState(BaseModel):
             cycle_count=cycle_count,
             day_anchor_date=day_anchor_date,
             day_anchor_equity=day_anchor_equity,
+            last_equity=last_equity,
         )
 
 

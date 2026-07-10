@@ -245,6 +245,7 @@ def run_cycle(
         cycle_count=state.cycle_count + 1,
         day_anchor_date=anchor_date,
         day_anchor_equity=anchor_equity,
+        last_equity=round(equity, 8),
     )
     store.save(new_state)
 

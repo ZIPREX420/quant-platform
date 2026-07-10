@@ -15,6 +15,7 @@ quant-desk-outcomes = "quant_platform.cli_outcomes:main"
 quant-validate-trades = "quant_platform.validation.cli:main"
 quant-status = "quant_platform.monitoring.status:main"
 quant-cycle = "quant_platform.cli_cycle:main"
+quant-dashboard = "quant_platform.cli_dashboard:main"
 
 [project.optional-dependencies]
 desk = [

@@ -54,6 +54,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(report.summary_line())
+    try:  # refresh the operator dashboard; never fail the cycle over rendering
+        from quant_platform.cli_dashboard import generate  # noqa: PLC0415
+        generate(root, ws, ws / "reports" / "dashboard.html")
+        print(f"dashboard: {ws / 'reports' / 'dashboard.html'}")
+    except Exception as exc:  # noqa: BLE001 - cycle result must survive dashboard bugs
+        print(f"WARNING: dashboard render failed: {exc}", file=sys.stderr)
     for r in report.results:
         marker = "" if r.approved is None else (" [approved]" if r.approved else " [REJECTED]")
         fill = f" fill@{r.fill_price}" if r.fill_price else ""
