@@ -267,3 +267,40 @@ class TestFunding:
         f.write_text("funding_time_utc,funding_rate\n2026-03-01T08:00,0.0001\n", encoding="utf-8")
         merged = merge_funding(self.bars_with_funding(), f)
         assert merged[1].funding == 0.0001
+
+
+class TestChannelSemantics:
+    """high_n/low_n exclude the current bar - breakouts must be expressible."""
+
+    def test_close_can_cross_above_prior_high(self):
+        sig = {
+            "kind": "declarative-rules", "parameters": {},
+            "entry_rules": [{"indicator": "close", "operator": "crosses_above",
+                             "operand": {"indicator": "high_n", "window": 3}}],
+            "exit_rules": [{"indicator": "close", "operator": "crosses_below",
+                            "operand": {"indicator": "low_n", "window": 3}}],
+        }
+        bars = [
+            Bar("d0", 100, 105, 95, 100),   # warmup for window=3
+            Bar("d1", 100, 104, 96, 101),
+            Bar("d2", 100, 103, 97, 100),
+            Bar("d3", 100, 102, 99, 100),   # close 100 <= prior-3 high 105 (pre-cross state)
+            Bar("d4", 100, 110, 99, 108),   # close 108 > prior-3 high 104 -> breakout signal
+            Bar("d5", 108, 112, 106, 110),  # entry fill at open 108
+            Bar("d6", 110, 111, 90, 92),    # close 92 < prior-3 low (99) -> exit signal
+            Bar("d7", 92, 95, 90, 93),      # exit fill
+        ]
+        trades = run_backtest(sig, bars, 0.0, 0.0)
+        assert len(trades) == 1
+        assert trades[0].entry_date == "d5" and trades[0].entry_price == 108
+        assert trades[0].exit_date == "d7"
+
+    def test_prior_window_values_exact(self):
+        from quant_platform.validation.backtest import _series
+        bars = [Bar(f"d{i}", 10 + i, 20 + i, 5 + i, 15 + i) for i in range(5)]
+        highs = _series("high_n", 2, bars)
+        # index 2: max(high[0], high[1]) = 21 ; index 4: max(high[2], high[3]) = 23
+        assert highs[0] is None and highs[1] is None
+        assert highs[2] == 21 and highs[4] == 23
+        lows = _series("low_n", 2, bars)
+        assert lows[2] == 5 and lows[4] == 7

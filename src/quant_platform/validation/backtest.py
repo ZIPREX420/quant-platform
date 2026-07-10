@@ -128,12 +128,15 @@ def _series(
                 out[i] = sum(trs[-window:]) / window
         return out
     if kind == "high_n":
-        for i in range(window - 1, n):
-            out[i] = max(b.high for b in bars[i - window + 1 : i + 1])
+        # highest high of the PRIOR n bars (current bar excluded) - Donchian
+        # semantics; including the current bar would make breakout rules like
+        # `close crosses_above high_n` unsatisfiable by construction.
+        for i in range(window, n):
+            out[i] = max(b.high for b in bars[i - window : i])
         return out
     if kind == "low_n":
-        for i in range(window - 1, n):
-            out[i] = min(b.low for b in bars[i - window + 1 : i + 1])
+        for i in range(window, n):
+            out[i] = min(b.low for b in bars[i - window : i])
         return out
     raise RuleError(f"unknown indicator '{kind}'")
 

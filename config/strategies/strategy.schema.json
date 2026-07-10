@@ -222,7 +222,8 @@
             "atr",
             "high_n",
             "low_n"
-          ]
+          ],
+          "description": "Indicator over the chosen series. high_n/low_n = highest high / lowest low of the PRIOR n bars (current bar excluded - Donchian breakout semantics)."
         },
         "window": {
           "type": "integer",
