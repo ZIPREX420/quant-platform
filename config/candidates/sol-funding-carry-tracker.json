@@ -1,0 +1,58 @@
+{
+  "id": "sol-funding-carry-tracker",
+  "version": "0.1.0",
+  "description": "H1 funding-carry rules, registered as a FALSIFICATION TRACKER (ADR-0006). The signed validation report docs/validation/sol-funding-carry-v0.1.0.md rejected this strategy: profitable 2020-early-2024, inverted since. This candidate exists to test that regime finding forward, on paper, at zero risk: if the 2024 inversion is real and persistent, this candidate's paper record will be net-negative. It is NOT a trading recommendation.",
+  "universe": {
+    "symbols": ["SOLUSDT"],
+    "exchanges": ["binance"]
+  },
+  "signal": {
+    "kind": "declarative-rules",
+    "parameters": {
+      "funding_sma_events": 9
+    },
+    "entry_rules": [
+      {
+        "indicator": "sma",
+        "window": 9,
+        "series": "funding",
+        "operator": "less_than",
+        "operand": 0
+      }
+    ],
+    "exit_rules": [
+      {
+        "indicator": "sma",
+        "window": 9,
+        "series": "funding",
+        "operator": "greater_than",
+        "operand": 0
+      }
+    ]
+  },
+  "risk": {
+    "max_position_pct_equity": 5,
+    "stop_loss_pct": 5,
+    "max_gross_exposure_pct": 50,
+    "max_daily_loss_pct": 2
+  },
+  "data_dependencies": [
+    {
+      "series": "ohlcv",
+      "frequency": "1h",
+      "lookback_bars": 200
+    },
+    {
+      "series": "funding",
+      "frequency": "1h",
+      "lookback_bars": 200
+    }
+  ],
+  "tracking": {
+    "prediction": "This candidate LOSES money net of protocol costs over the tracking period. Basis: the one-shot SOLUSDT validation (271 trades) showed naive negative-funding carry inverted around 2024 - persistent negative funding now marks informed shorts, not crowded longs. If the forward paper record is instead clearly net-positive over >=6 months, the regime finding is falsified and H1 must be reopened.",
+    "registered_by": "Seppe Willemsens",
+    "registered_date": "2026-07-10",
+    "hypothesis": "H1",
+    "journal_ref": "docs/validation/sol-funding-carry-v0.1.0.md"
+  }
+}
