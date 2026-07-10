@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://project-genesis.local/schemas/strategy.schema.json",
   "title": "Strategy definition (ADR-0005 research-to-production contract)",
-  "description": "A validated strategy artifact produced by Research. The execution loader refuses any strategy whose validation_report is missing or unsigned. Risk parameters are enforced by the risk engine as hard caps, not targets. Schema v1.1 (2026-07-10): rules may read the perp funding series; funding accrual must be modeled by validation for perp instruments (protocol v1).",
+  "description": "A validated strategy artifact produced by Research. The execution loader refuses any strategy whose validation_report is missing or unsigned. Risk parameters are enforced by the risk engine as hard caps, not targets. Schema v1.1 (2026-07-10): rules may read the perp funding series; funding accrual must be modeled by validation for perp instruments (protocol v1). Schema v1.2 (2026-07-10): validation_report.type distinguishes historical (protocol v1) from forward-evidence (protocol v2 addendum) passes; both carry the identical contract.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -198,6 +198,15 @@
             "pass"
           ],
           "description": "Only passing strategies are loadable, by construction."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "historical",
+            "forward-evidence"
+          ],
+          "default": "historical",
+          "description": "Evidence track that produced the pass: protocol v1 backtesting (historical) or protocol v2 audited paper record (forward-evidence)."
         }
       }
     }
