@@ -51,7 +51,7 @@ def test_run_desk_end_to_end(tmp_path):
 
     memo_path, record_id = run_desk(
         symbol="BTCUSD", client=client, llm=StubLLM(), model_id="test/stub",
-        journal=journal, out_dir=tmp_path / "out", cache=cache,
+        journal=journal, out_dir=tmp_path / "out", cache=cache, enrich=False,
     )
     assert memo_path.is_file()
     text = memo_path.read_text(encoding="utf-8")
@@ -66,7 +66,7 @@ def test_run_desk_end_to_end(tmp_path):
     # second run: cache hit - no additional HTTP call
     memo_path2, _ = run_desk(
         symbol="BTCUSD", client=client, llm=StubLLM(), model_id="test/stub",
-        journal=journal, out_dir=tmp_path / "out", cache=cache,
+        journal=journal, out_dir=tmp_path / "out", cache=cache, enrich=False,
     )
     assert calls["http"] == 1
     assert len(journal.memos()) == 2

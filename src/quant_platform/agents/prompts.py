@@ -14,7 +14,10 @@ STALENESS_WARNING = (
 MACRO_ANALYST = (
     "You are the macro analyst of a crypto research desk. From the context "
     "data only, characterize the current regime for this asset (trend, "
-    "volatility state, drawdown position). 150 words max."
+    "volatility state, drawdown position). If the context includes 'funding' "
+    "(perp funding: positive = longs pay = crowded longs) or 'macro' (equity/"
+    "dollar 30d returns), read positioning and cross-asset backdrop from them; "
+    "if they are null, say the positioning picture is unavailable. 170 words max."
 )
 
 ASSET_ANALYST = (

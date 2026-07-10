@@ -55,3 +55,43 @@ def test_short_history_rejected():
 def test_no_sma200_below_200_bars():
     ctx = build_market_context(linear_history(n=150))
     assert ctx.trend["sma200"] is None and ctx.trend["price_vs_sma200_pct"] is None
+
+
+class TestM10Enrichment:
+    def test_funding_snapshot_math(self):
+        from datetime import datetime, timedelta, timezone
+        from quant_platform.data.context import funding_snapshot
+        t0 = datetime(2026, 7, 1, tzinfo=timezone.utc)
+        events = [(t0 + timedelta(hours=8 * i), 0.0001) for i in range(90)]
+        snap = funding_snapshot(events)
+        assert snap == {"last_pct": 0.01, "avg_3d_pct": 0.01, "avg_30d_pct": 0.01}
+
+    def test_funding_snapshot_insufficient_events(self):
+        from datetime import datetime, timezone
+        from quant_platform.data.context import funding_snapshot
+        t0 = datetime(2026, 7, 1, tzinfo=timezone.utc)
+        snap = funding_snapshot([(t0, -0.0002)])
+        assert snap["last_pct"] == -0.02
+        assert snap["avg_3d_pct"] is None and snap["avg_30d_pct"] is None
+        assert funding_snapshot([]) == {
+            "last_pct": None, "avg_3d_pct": None, "avg_30d_pct": None,
+        }
+
+    def test_perp_symbol_mapping(self):
+        from quant_platform.cli import perp_symbol_for
+        assert perp_symbol_for("BTCUSD") == "BTCUSDT"
+        assert perp_symbol_for("BTC-USD") == "BTCUSDT"
+        assert perp_symbol_for("SOLUSDT") == "SOLUSDT"
+        assert perp_symbol_for("BTCEUR") is None
+
+    def test_context_backward_compatible_without_enrichment(self, tmp_path):
+        # pre-M10 journal records have no funding/macro keys - must still validate
+        import json
+        from quant_platform.data.context import MarketContext
+        old = {
+            "symbol": "BTC-USD", "as_of": "2026-07-01", "source": "t", "stale_days": 0,
+            "last_close": 100.0, "returns_pct": {}, "volatility_annualized_pct": {},
+            "trend": {}, "range_365d": {}, "avg_volume_30d": None, "bars": 60,
+        }
+        ctx = MarketContext.model_validate(json.loads(json.dumps(old)))
+        assert ctx.funding is None and ctx.macro is None

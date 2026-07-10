@@ -23,6 +23,52 @@ log = logging.getLogger("quant_platform.desk")
 CACHE_MAX_AGE_HOURS = 6
 
 
+def perp_symbol_for(desk_symbol: str) -> str | None:
+    """Map a desk symbol (BTCUSD, BTC-USD, BTCUSDT) to its Binance perp symbol."""
+    s = desk_symbol.replace("-", "").upper()
+    if s.endswith("USDT"):
+        return s
+    if s.endswith("USD"):
+        return s + "T"
+    return None
+
+
+def _fetch_funding(symbol: str) -> dict[str, float | None] | None:
+    """Perp funding positioning for the desk context. NEVER fatal: enrichment
+    failing must not cost a desk run (the 4 LLM calls are the expensive part)."""
+    perp = perp_symbol_for(symbol)
+    if perp is None:
+        return None
+    try:
+        from quant_platform.data.binance_client import BinanceClient  # noqa: PLC0415
+        from quant_platform.data.context import funding_snapshot  # noqa: PLC0415
+
+        with BinanceClient() as feed:
+            events = feed.funding_rates(perp, limit=90)
+        return funding_snapshot([(e.funding_time, e.rate) for e in events])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("funding enrichment skipped", extra={"symbol": symbol, "error": str(exc)})
+        return None
+
+
+def _fetch_macro(client: OpenBBClient, start: date, end: date) -> dict[str, float | None] | None:
+    """30d returns of macro reference series via the local OpenBB service. Non-fatal."""
+    out: dict[str, float | None] = {}
+    for name, fetch in (
+        ("spx_30d_pct", lambda: client.index_historical("^GSPC", start, end)),
+        ("dxy_30d_pct", lambda: client.currency_historical("DX-Y.NYB", start, end)),
+    ):
+        try:
+            history = fetch()
+            closes = [b.close for b in history.bars]
+            base = closes[-31] if len(closes) > 30 else closes[0]
+            out[name] = round((closes[-1] / base - 1.0) * 100, 2)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("macro enrichment skipped", extra={"series": name, "error": str(exc)})
+            out[name] = None
+    return out
+
+
 def run_desk(
     symbol: str,
     client: OpenBBClient,
@@ -33,6 +79,7 @@ def run_desk(
     cache: PriceHistoryCache | None = None,
     lookback_days: int = 400,
     token_budget: int | None = None,
+    enrich: bool = True,
 ) -> tuple[Path, str]:
     """Run one desk cycle. Returns (memo_path, journal_record_id)."""
     from quant_platform.orchestration.research_graph import DEFAULT_TOKEN_BUDGET, ResearchGraph
@@ -52,7 +99,11 @@ def run_desk(
         if cache is not None:
             cache.put(history, start, end)
 
-    context = build_market_context(history)
+    context = build_market_context(
+        history,
+        funding=_fetch_funding(symbol) if enrich else None,
+        macro=_fetch_macro(client, start, end) if enrich else None,
+    )
     if context.stale_days > 1:
         log.warning("stale data", extra={"symbol": symbol, "stale_days": context.stale_days})
 
