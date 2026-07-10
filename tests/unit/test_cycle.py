@@ -184,3 +184,63 @@ def test_no_candidates_is_a_valid_cycle(tmp_path):
     r = run_cycle(cands, state_path, audit_path, client=feed, now=feed.now_after_bars())
     assert r.results == () and r.equity == 10_000.0
     assert StateStore(state_path).load().cycle_count == 1
+
+
+class TestOutcomeLoopIntegration:
+    """M10: the cycle resolves due memo outcomes automatically."""
+
+    def _journal_with_due_memo(self, ws: Path):
+        from quant_platform.journal import DecisionJournal, MemoRecord
+        journal = DecisionJournal(ws / "reports" / "research" / "journal.jsonl")
+        journal.append_memo(MemoRecord(
+            symbol="BTCUSD",
+            context={
+                "symbol": "BTCUSD", "as_of": "2026-06-20", "source": "t", "stale_days": 0,
+                "last_close": 100.0, "returns_pct": {}, "volatility_annualized_pct": {},
+                "trend": {}, "range_365d": {}, "avg_volume_30d": None, "bars": 60,
+            },
+            memo="Confidence: LOW", model="test", confidence="LOW",
+        ))
+        return journal
+
+    def test_due_outcome_recorded_via_mock_service(self, tmp_path):
+        import httpx
+        from quant_platform.cli_cycle import resolve_due_outcomes
+        from quant_platform.data.openbb_client import OpenBBClient
+
+        journal = self._journal_with_due_memo(tmp_path)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "system/version" in str(request.url):
+                return httpx.Response(200, json={"version": "test"})
+            return httpx.Response(200, json={"results": [
+                {"date": "2026-06-20", "open": 100, "high": 100, "low": 100,
+                 "close": 100.0, "volume": 1},
+                {"date": "2026-07-09", "open": 110, "high": 110, "low": 110,
+                 "close": 110.0, "volume": 1},
+            ]})
+
+        client = OpenBBClient(transport=httpx.MockTransport(handler))
+        assert resolve_due_outcomes(tmp_path, client=client) == 1
+        outcomes = journal.outcomes_for(journal.memos()[0].record_id)
+        assert len(outcomes) == 1
+        assert outcomes[0].realized_return_pct == 10.0
+        # idempotent: resolved memos are not re-resolved
+        assert resolve_due_outcomes(tmp_path, client=client) == 0
+
+    def test_offline_service_returns_none(self, tmp_path):
+        import httpx
+        from quant_platform.cli_cycle import resolve_due_outcomes
+        from quant_platform.data.openbb_client import OpenBBClient
+
+        self._journal_with_due_memo(tmp_path)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("service down")
+
+        client = OpenBBClient(transport=httpx.MockTransport(handler))
+        assert resolve_due_outcomes(tmp_path, client=client) is None
+
+    def test_empty_journal_short_circuits(self, tmp_path):
+        from quant_platform.cli_cycle import resolve_due_outcomes
+        assert resolve_due_outcomes(tmp_path, client=object()) == 0  # never touched

@@ -17,6 +17,31 @@ from quant_platform.execution.state import StateError
 from quant_platform.strategies.candidates import CandidateLoadError
 
 
+def resolve_due_outcomes(workspace_root: Path, client=None) -> int | None:
+    """Resolve memo outcomes past their horizon (M10: no human memory needed).
+
+    Returns the number of outcomes recorded, or None when the local OpenBB
+    service is unreachable (resolution simply waits for a cycle when it is
+    up). Never fatal: the cycle result must not depend on the desk stack.
+    """
+    from quant_platform.cli_outcomes import record_outcomes  # noqa: PLC0415
+    from quant_platform.data.openbb_client import OpenBBClient  # noqa: PLC0415
+    from quant_platform.journal import DecisionJournal  # noqa: PLC0415
+
+    journal = DecisionJournal(workspace_root / "reports" / "research" / "journal.jsonl")
+    if not journal.pending():
+        return 0
+    owns = client is None
+    client = client or OpenBBClient()
+    try:
+        if not client.health():
+            return None
+        return len(record_outcomes(journal, client))
+    finally:
+        if owns:
+            client.close()
+
+
 def find_workspace_root(start: Path) -> Path:
     """Walk up until the PROJECT GENESIS workspace root (has config/candidates)."""
     for parent in [start, *start.parents]:
@@ -54,6 +79,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(report.summary_line())
+    try:  # resolve due memo outcomes while we have the operator's attention
+        resolved = resolve_due_outcomes(ws)
+        if resolved is None:
+            print("outcomes: skipped (local OpenBB service offline; will retry next cycle)")
+        elif resolved:
+            print(f"outcomes: {resolved} memo outcome(s) recorded")
+    except Exception as exc:  # noqa: BLE001 - outcome bugs must not fail the cycle
+        print(f"WARNING: outcome resolution failed: {exc}", file=sys.stderr)
     try:  # refresh the operator dashboard; never fail the cycle over rendering
         from quant_platform.cli_dashboard import generate  # noqa: PLC0415
         generate(root, ws, ws / "reports" / "dashboard.html")
