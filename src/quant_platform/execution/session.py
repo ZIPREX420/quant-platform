@@ -87,6 +87,7 @@ class PaperTradingSession:
         prices: dict[str, float],
         equity_start_of_day: float,
         sanity: list[CheckResult] | None = None,
+        close_quantity: float | None = None,
     ) -> AuditRecord:
         """Run one signal through risk checks; execute on paper iff approved."""
         if symbol not in prices:
@@ -113,7 +114,13 @@ class PaperTradingSession:
                 side=order.side,
                 notional=decision.approved_notional,
             )
-            fill = self.exchange.execute(approved_order, prices[symbol])
+            quantity = None
+            if close_quantity is not None:
+                if side is not Side.SELL:
+                    raise ValueError("close_quantity is only valid for SELL orders")
+                # if risk shrank the order, close proportionally - never exceed approval
+                quantity = close_quantity * (decision.approved_notional / target_notional)
+            fill = self.exchange.execute(approved_order, prices[symbol], quantity=quantity)
             self.account.apply(fill)
 
         record = AuditRecord(

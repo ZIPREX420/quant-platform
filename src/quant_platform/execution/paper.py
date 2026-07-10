@@ -51,20 +51,32 @@ class PaperExchange:
         self._fee_rate = fee_rate
         self._slippage_rate = slippage_rate
 
-    def execute(self, order: OrderRequest, market_price: float) -> PaperFill:
+    def execute(
+        self, order: OrderRequest, market_price: float, quantity: float | None = None
+    ) -> PaperFill:
+        """Fill an order. With ``quantity`` set (closing sells), fill EXACTLY that
+        many units at the slipped price and derive the cash notional from it -
+        deriving quantity from a pre-slippage notional would over-sell by the
+        slippage factor and leave a residual position (M9 cycle-test finding)."""
         if market_price <= 0:
             raise ValueError(f"market price must be positive, got {market_price}")
         drift = 1.0 + self._slippage_rate if order.side is Side.BUY else 1.0 - self._slippage_rate
         fill_price = market_price * drift
-        quantity = order.notional / fill_price
+        if quantity is None:
+            notional = order.notional
+            quantity = notional / fill_price
+        else:
+            if quantity <= 0:
+                raise ValueError(f"explicit quantity must be positive, got {quantity}")
+            notional = quantity * fill_price
         return PaperFill(
             strategy_id=order.strategy_id,
             symbol=order.symbol,
             side=order.side,
-            requested_notional=order.notional,
+            requested_notional=round(notional, 8),
             fill_price=round(fill_price, 8),
             quantity=round(quantity, 10),
-            fee=round(order.notional * self._fee_rate, 8),
+            fee=round(notional * self._fee_rate, 8),
             slippage_cost=round(abs(fill_price - market_price) * quantity, 8),
         )
 
