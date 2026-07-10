@@ -124,3 +124,64 @@ class TestPaperTradingSession:
         from quant_platform.strategies.loader import StrategyLoadError
         with pytest.raises(StrategyLoadError):
             load_strategy(REPO / "config/strategies/example-btc-trend.json", tmp_path)
+
+
+class TestCandidateTierInSession:
+    """ADR-0006: candidates run in the SAME session with the SAME governance,
+    and every audit record is stamped with their tier."""
+
+    def loaded_candidate(self, tmp_path):
+        definition = json.loads(
+            (REPO / "config/strategies/example-btc-trend.json").read_text()
+        )
+        del definition["validation_report"]
+        definition["id"] = "cand-exec-test"
+        definition["tracking"] = {
+            "prediction": (
+                "Pre-registered: expected to lose net of costs; forward record "
+                "exists to test the 2024 regime-inversion finding."
+            ),
+            "registered_by": "pytest",
+            "registered_date": "2026-07-10",
+        }
+        p = tmp_path / "c.json"
+        p.write_text(json.dumps(definition), encoding="utf-8")
+        from quant_platform.strategies.candidates import load_candidate
+        return load_candidate(p)
+
+    def test_candidate_fill_audited_with_tier(self, tmp_path):
+        session = PaperTradingSession(
+            strategy=self.loaded_candidate(tmp_path),
+            account=PaperAccount(starting_cash=10_000.0),
+            audit=ExecutionAudit(tmp_path / "executions.jsonl"),
+        )
+        record = session.process_signal(
+            "BTC-USD", Side.BUY, 400.0, {"BTC-USD": 100.0}, 10_000.0
+        )
+        assert record.tier == "candidate"
+        assert record.approved and record.fill is not None
+        on_disk = session.audit.records()
+        assert on_disk[-1].tier == "candidate"
+
+    def test_candidate_risk_caps_enforced_identically(self, tmp_path):
+        # example caps: max_position 5% of equity -> 10k equity caps at 500
+        session = PaperTradingSession(
+            strategy=self.loaded_candidate(tmp_path),
+            account=PaperAccount(starting_cash=10_000.0),
+            audit=ExecutionAudit(tmp_path / "executions.jsonl"),
+        )
+        record = session.process_signal(
+            "BTC-USD", Side.BUY, 5_000.0, {"BTC-USD": 100.0}, 10_000.0
+        )
+        assert record.approved_notional <= 500.0 + 1e-9
+
+    def test_validated_strategy_records_stamped_validated(self, tmp_path):
+        session = PaperTradingSession(
+            strategy=loaded_strategy(tmp_path),
+            account=PaperAccount(starting_cash=10_000.0),
+            audit=ExecutionAudit(tmp_path / "executions.jsonl"),
+        )
+        record = session.process_signal(
+            "BTC-USD", Side.BUY, 400.0, {"BTC-USD": 100.0}, 10_000.0
+        )
+        assert record.tier == "validated"

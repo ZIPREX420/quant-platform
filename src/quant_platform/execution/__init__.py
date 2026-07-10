@@ -11,6 +11,12 @@ from quant_platform.execution.paper import (
     PaperFill,
 )
 from quant_platform.execution.session import AuditRecord, ExecutionAudit, PaperTradingSession
+from quant_platform.execution.state import (
+    OpenPosition,
+    PaperState,
+    StateError,
+    StateStore,
+)
 
 __all__ = [
     "ExecutionMode",
@@ -20,4 +26,8 @@ __all__ = [
     "AuditRecord",
     "ExecutionAudit",
     "PaperTradingSession",
+    "OpenPosition",
+    "PaperState",
+    "StateError",
+    "StateStore",
 ]

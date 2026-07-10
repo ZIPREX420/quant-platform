@@ -3,8 +3,10 @@
 The session is the ONLY component allowed to call the exchange adapter, and it
 does so exclusively with notionals approved by the deterministic RiskEngine.
 Every signal - approved, shrunk, or rejected - produces an append-only audit
-record. Strategies enter a session only as LoadedStrategy instances (ADR-0005:
-the loader has already refused anything unvalidated).
+record. A session runs either a LoadedStrategy (ADR-0005 validated tier) or a
+LoadedCandidate (ADR-0006 candidate tier, paper only); in both cases the
+loader has already enforced the artifact contract, and every audit record is
+stamped with the tier so the two records can never be conflated.
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from quant_platform.execution.paper import ExecutionMode, PaperAccount, PaperExchange, PaperFill
 from quant_platform.risk.engine import CheckResult, OrderRequest, PortfolioState, RiskEngine, Side
+from quant_platform.strategies.candidates import LoadedCandidate
 from quant_platform.strategies.loader import LoadedStrategy
 
 
@@ -25,6 +28,7 @@ class AuditRecord(BaseModel):
     audit_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     mode: ExecutionMode
+    tier: str = "validated"
     strategy_id: str
     symbol: str
     side: Side
@@ -62,7 +66,7 @@ class PaperTradingSession:
 
     def __init__(
         self,
-        strategy: LoadedStrategy,
+        strategy: LoadedStrategy | LoadedCandidate,
         account: PaperAccount,
         audit: ExecutionAudit,
         exchange: PaperExchange | None = None,
@@ -73,6 +77,7 @@ class PaperTradingSession:
         self.exchange = exchange or PaperExchange()
         self.engine = RiskEngine(strategy.definition["risk"])
         self.mode = ExecutionMode.PAPER
+        self.tier = getattr(strategy, "tier", "validated")
 
     def process_signal(
         self,
@@ -113,6 +118,7 @@ class PaperTradingSession:
 
         record = AuditRecord(
             mode=self.mode,
+            tier=self.tier,
             strategy_id=self.strategy.id,
             symbol=symbol,
             side=side,
