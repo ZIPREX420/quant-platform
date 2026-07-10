@@ -119,17 +119,31 @@ class TestStopLoss:
         assert trades[0].stopped_out and trades[0].exit_price == 80
         assert trades[0].return_fraction == pytest.approx(80 / 102 - 1)
 
-    def test_stop_takes_precedence_over_rule_exit(self):
+    def test_rule_exit_at_open_preempts_later_intrabar_stop(self):
+        # chronology: the rule exit fills AT the open (92), before price falls
+        # to the stop (91.8) later in the bar - so this is NOT a stop-out.
         sig = dict(self.SIG, exit_rules=[{"indicator": "close", "operator": "less_than",
                                           "operand": 95}])
         bars = self.make_bars([
             (100, 101, 99, 101),
-            (102, 103, 101, 102),  # entry
-            (100, 101, 94, 94),    # close 94 -> rule exit signal AND next bar hits stop
-            (92, 93, 90, 91),      # stop (91.8) checked first: open 92 > stop, low 90 <= stop
+            (102, 103, 101, 102),  # entry @102, stop 91.8
+            (100, 101, 94, 94),    # close 94 -> rule exit signal
+            (92, 93, 90, 91),      # exit fills at open 92; intra-bar 90 is moot
         ])
         trades = run_backtest(sig, bars, 0.0, 0.0, stop_loss_pct=10.0)
-        assert trades[0].stopped_out  # not a rule exit
+        assert not trades[0].stopped_out and trades[0].exit_price == 92
+
+    def test_gap_through_stop_on_rule_exit_bar_is_a_stop(self):
+        sig = dict(self.SIG, exit_rules=[{"indicator": "close", "operator": "less_than",
+                                          "operand": 95}])
+        bars = self.make_bars([
+            (100, 101, 99, 101),
+            (102, 103, 101, 102),  # entry @102, stop 91.8
+            (100, 101, 94, 94),    # rule exit signal
+            (88, 89, 85, 86),      # opens BELOW the stop -> flagged stopped, fill at open
+        ])
+        trades = run_backtest(sig, bars, 0.0, 0.0, stop_loss_pct=10.0)
+        assert trades[0].stopped_out and trades[0].exit_price == 88
 
     def test_no_stop_behaviour_unchanged(self):
         bars = self.make_bars([
@@ -156,3 +170,100 @@ class TestStopLoss:
         trades = run_backtest(self.SIG, bars, 0.0, 0.0, stop_loss_pct=10.0)
         assert len(trades) == 2
         assert trades[0].exit_price == 91 and trades[1].exit_price == pytest.approx(180.0)
+
+
+class TestFunding:
+    """Funding accrual and funding-series rules (schema v1.1)."""
+
+    SIG = {
+        "kind": "declarative-rules", "parameters": {},
+        "entry_rules": [{"indicator": "close", "operator": "greater_than", "operand": 100}],
+        "exit_rules": [{"indicator": "close", "operator": "less_than", "operand": 90}],
+    }
+
+    def bars_with_funding(self):
+        # entry signal at bar0 close (101>100); fill bar1 open; two funding
+        # events while held (+0.01 and -0.005); exit signal bar3 close (85<90); fill bar4
+        return [
+            Bar("2026-03-01T00:00", 100, 102, 99, 101),
+            Bar("2026-03-01T08:00", 100, 102, 99, 100, funding=0.01),
+            Bar("2026-03-01T16:00", 100, 102, 99, 100, funding=-0.005),
+            Bar("2026-03-02T00:00", 100, 102, 84, 85),
+            Bar("2026-03-02T08:00", 100, 102, 99, 100),
+        ]
+
+    def test_long_pays_positive_receives_negative_funding(self):
+        trades = run_backtest(self.SIG, self.bars_with_funding(), 0.0, 0.0)
+        assert len(trades) == 1
+        # entry fills at bar1 open: bar1's own event (+0.01) is NOT paid
+        # (position born at that instant); bar2's event (-0.005) IS received.
+        # price roundtrip 100 -> 100 => return = +0.005 exactly.
+        assert trades[0].return_fraction == pytest.approx(0.005, abs=1e-9)
+
+    def test_rule_exit_at_open_skips_that_bars_event(self):
+        bars = [
+            Bar("2026-03-01T00:00", 100, 102, 99, 101),                 # entry signal
+            Bar("2026-03-01T08:00", 100, 102, 99, 85),                  # fill; exit signal (85<90)
+            Bar("2026-03-01T16:00", 100, 102, 99, 100, funding=0.02),   # exit fill AT open: no pay
+        ]
+        trades = run_backtest(self.SIG, bars, 0.0, 0.0)
+        assert trades[0].return_fraction == pytest.approx(0.0, abs=1e-9)
+
+    def test_intrabar_stop_pays_that_bars_open_event(self):
+        sig = dict(self.SIG, exit_rules=[{"indicator": "close", "operator": "less_than",
+                                          "operand": 1}])  # never rule-exits
+        bars = [
+            Bar("2026-03-01T00:00", 100, 102, 99, 101),                        # entry signal
+            Bar("2026-03-01T08:00", 100, 102, 99, 100),                        # fill @100, stop 90
+            Bar("2026-03-01T16:00", 95, 96, 88, 92, funding=0.01),             # survives open, pays, then stopped @90
+        ]
+        trades = run_backtest(sig, bars, 0.0, 0.0, stop_loss_pct=10.0)
+        assert trades[0].stopped_out
+        expected = (90.0 / 100.0) * (1 - 0.01) - 1.0
+        assert trades[0].return_fraction == pytest.approx(expected, abs=1e-9)
+
+    def test_funding_outside_position_ignored(self):
+        bars = [
+            Bar("2026-03-01T00:00", 100, 102, 99, 50, funding=0.05),   # not in position
+            Bar("2026-03-01T08:00", 100, 102, 99, 101),                # entry signal
+            Bar("2026-03-01T16:00", 100, 102, 99, 85),                 # fill here; exit signal
+            Bar("2026-03-02T00:00", 100, 102, 99, 100),                # exit fill
+        ]
+        trades = run_backtest(self.SIG, bars, 0.0, 0.0)
+        assert trades[0].return_fraction == pytest.approx(0.0, abs=1e-9)
+
+    def test_funding_series_rule_triggers(self):
+        sig = {
+            "kind": "declarative-rules", "parameters": {},
+            "entry_rules": [{"indicator": "sma", "window": 2, "series": "funding",
+                             "operator": "less_than", "operand": -0.0001}],
+            "exit_rules": [{"indicator": "close", "series": "funding",
+                            "operator": "greater_than", "operand": 0.0}],
+        }
+        bars = [
+            Bar("d1", 100, 101, 99, 100, funding=-0.001),
+            Bar("d2", 100, 101, 99, 100, funding=-0.002),  # sma2=-0.0015 < -0.0001 -> entry
+            Bar("d3", 100, 101, 99, 100),                  # entry fill
+            Bar("d4", 100, 101, 99, 100, funding=0.001),   # last funding > 0 -> exit signal
+            Bar("d5", 100, 101, 99, 100),                  # exit fill
+        ]
+        trades = run_backtest(sig, bars, 0.0, 0.0)
+        assert len(trades) == 1
+        assert trades[0].entry_date == "d3" and trades[0].exit_date == "d5"
+
+    def test_unsupported_funding_indicator_rejected(self):
+        sig = dict(self.SIG, entry_rules=[{"indicator": "rsi", "window": 5, "series": "funding",
+                                           "operator": "less_than", "operand": 30}])
+        with pytest.raises(RuleError, match="not supported on the funding series"):
+            run_backtest(sig, self.bars_with_funding(), 0.0, 0.0)
+
+    def test_merge_funding_alignment_guard(self, tmp_path):
+        from quant_platform.validation.backtest import merge_funding
+        f = tmp_path / "funding.csv"
+        f.write_text("funding_time_utc,funding_rate\n2026-03-01T08:00,0.0001\n"
+                     "2099-01-01T00:00,0.0001\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="misaligned"):
+            merge_funding(self.bars_with_funding(), f)
+        f.write_text("funding_time_utc,funding_rate\n2026-03-01T08:00,0.0001\n", encoding="utf-8")
+        merged = merge_funding(self.bars_with_funding(), f)
+        assert merged[1].funding == 0.0001

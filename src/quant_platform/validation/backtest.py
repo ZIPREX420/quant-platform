@@ -27,6 +27,7 @@ class Bar:
     high: float
     low: float
     close: float
+    funding: float | None = None  # perp funding-rate event occurring in this bar, if any
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,32 @@ class RuleError(ValueError):
     """The rule set references something this reference implementation lacks."""
 
 
-def _series(kind: str, window: int | None, bars: list[Bar]) -> list[float | None]:
+def _funding_series(kind: str, window: int | None, bars: list[Bar]) -> list[float | None]:
+    """Funding-series indicators. Windows count funding EVENTS (e.g. 9 = 3 days
+    at 8h funding), not bars. 'close' = last observed event rate."""
+    n = len(bars)
+    out: list[float | None] = [None] * n
+    events: list[float] = []
+    for i, bar in enumerate(bars):
+        if bar.funding is not None:
+            events.append(bar.funding)
+        if kind == "close":
+            out[i] = events[-1] if events else None
+        elif kind == "sma":
+            if window is None:
+                raise RuleError("funding sma requires a window (event count)")
+            if len(events) >= window:
+                out[i] = sum(events[-window:]) / window
+        else:
+            raise RuleError(f"indicator '{kind}' not supported on the funding series")
+    return out
+
+
+def _series(
+    kind: str, window: int | None, bars: list[Bar], series: str = "price"
+) -> list[float | None]:
+    if series == "funding":
+        return _funding_series(kind, window, bars)
     closes = [b.close for b in bars]
     n = len(bars)
     if kind == "close":
@@ -115,11 +141,13 @@ def _series(kind: str, window: int | None, bars: list[Bar]) -> list[float | None
 def _operand_series(operand, bars: list[Bar]) -> list[float | None]:
     if isinstance(operand, (int, float)):
         return [float(operand)] * len(bars)
-    return _series(operand["indicator"], operand.get("window"), bars)
+    return _series(
+        operand["indicator"], operand.get("window"), bars, operand.get("series", "price")
+    )
 
 
 def _rule_signal(rule: dict, bars: list[Bar]) -> list[bool]:
-    left = _series(rule["indicator"], rule.get("window"), bars)
+    left = _series(rule["indicator"], rule.get("window"), bars, rule.get("series", "price"))
     right = _operand_series(rule["operand"], bars)
     op = rule["operator"]
     n = len(bars)
@@ -160,10 +188,11 @@ def run_backtest(
 
     stop_loss_pct comes from the definition's `risk` block (single source of
     truth - the M6 v0.1.0 failure was validating rules without the declared
-    stop). Stop handling is intra-bar and conservative:
+    stop). Stop handling is intra-bar and chronological:
     - triggered when bar.low touches the stop level;
-    - gap-through: if the bar OPENS below the stop, fill at the open (worse);
-    - a stop and a rule-exit in the same window: the stop wins (pessimistic).
+    - gap-through: if the bar OPENS at/below the stop, fill at the open (worse);
+    - a rule exit fills AT the open and therefore preempts an intra-bar stop
+      that would only have triggered later in the same bar (true event order).
     """
     if signal.get("kind") != "declarative-rules":
         raise RuleError(f"unsupported signal kind: {signal.get('kind')}")
@@ -179,9 +208,10 @@ def run_backtest(
     entry_price = 0.0
     entry_date = ""
     stop_level = 0.0
+    funding_factor = 1.0  # multiplicative accrual: long pays positive funding
 
     def close_position(exit_price: float, exit_date: str, stopped: bool, forced: bool = False):
-        net = (exit_price / entry_price) * (1 - fee_rate) * (1 - fee_rate)
+        net = (exit_price / entry_price) * (1 - fee_rate) * (1 - fee_rate) * funding_factor
         trades.append(
             BacktestTrade(
                 entry_date=entry_date,
@@ -194,27 +224,35 @@ def run_backtest(
             )
         )
 
+    # Funding boundary semantics (documented, tested): an event accrues only if
+    # the position exists strictly across it. The entry-fill bar's own event is
+    # not paid (position born at that instant); an exit AT the open (rule exit
+    # or gap-stop) does not pay that open's event; an intra-bar stop DOES pay
+    # it, because the position survived the open.
     for i in range(len(bars) - 1):  # signal at close i -> fill at open i+1
         nxt = bars[i + 1]
-        if in_position and stop_loss_pct is not None:
-            # stop is checked on the NEXT bar before any rule-exit fill
-            if nxt.open <= stop_level:  # gapped through the stop
-                close_position(nxt.open * (1 - slippage_rate), nxt.date, stopped=True)
+        if in_position:
+            exits_at_open = exits[i] or (
+                stop_loss_pct is not None and nxt.open <= stop_level
+            )
+            if exits_at_open:
+                stopped = stop_loss_pct is not None and nxt.open <= stop_level
+                close_position(nxt.open * (1 - slippage_rate), nxt.date, stopped=stopped)
                 in_position = False
                 continue
-            if nxt.low <= stop_level:  # touched intra-bar
+            if nxt.funding is not None:
+                funding_factor *= 1.0 - nxt.funding  # long pays positive, receives negative
+            if stop_loss_pct is not None and nxt.low <= stop_level:  # touched intra-bar
                 close_position(stop_level * (1 - slippage_rate), nxt.date, stopped=True)
                 in_position = False
                 continue
-        if not in_position and entries[i]:
+        elif entries[i]:
             entry_price = nxt.open * (1 + slippage_rate)
             entry_date = nxt.date
             in_position = True
+            funding_factor = 1.0
             if stop_loss_pct is not None:
                 stop_level = entry_price * (1 - stop_loss_pct / 100.0)
-        elif in_position and exits[i]:
-            close_position(nxt.open * (1 - slippage_rate), nxt.date, stopped=False)
-            in_position = False
     if in_position:
         last = bars[-1]
         close_position(last.open * (1 - slippage_rate), last.date, stopped=False, forced=True)
@@ -240,3 +278,35 @@ def load_bars_csv(path) -> list[Bar]:
     if bars != sorted(bars, key=lambda b: b.date):
         raise ValueError("bars must be date-ascending")
     return bars
+
+
+def merge_funding(bars: list[Bar], funding_csv_path) -> list[Bar]:
+    """Attach funding events to the bar covering each event timestamp.
+
+    Funding times are exact bar boundaries (00/08/16 UTC on 1h bars); an event
+    is attached to the bar whose timestamp matches its own, i.e. it is known by
+    that bar's close (no look-ahead: signals fill next-bar-open as always).
+    """
+    import csv
+    from dataclasses import replace
+    from pathlib import Path
+
+    events: dict[str, float] = {}
+    with Path(funding_csv_path).open(newline="", encoding="utf-8-sig") as fh:
+        for row in csv.DictReader(fh):
+            events[row["funding_time_utc"][:16]] = float(row["funding_rate"])
+    matched = 0
+    out = []
+    for bar in bars:
+        rate = events.get(bar.date[:16])
+        if rate is not None:
+            matched += 1
+            out.append(replace(bar, funding=rate))
+        else:
+            out.append(bar)
+    if matched < len(events) * 0.9:
+        raise ValueError(
+            f"only {matched}/{len(events)} funding events matched bar timestamps - "
+            "bar/funding series appear misaligned"
+        )
+    return out

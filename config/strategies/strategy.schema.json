@@ -2,10 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://project-genesis.local/schemas/strategy.schema.json",
   "title": "Strategy definition (ADR-0005 research-to-production contract)",
-  "description": "A validated strategy artifact produced by Research. The execution loader refuses any strategy whose validation_report is missing or unsigned. Risk parameters are enforced by the risk engine as hard caps, not targets.",
+  "description": "A validated strategy artifact produced by Research. The execution loader refuses any strategy whose validation_report is missing or unsigned. Risk parameters are enforced by the risk engine as hard caps, not targets. Schema v1.1 (2026-07-10): rules may read the perp funding series; funding accrual must be modeled by validation for perp instruments (protocol v1).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "version", "universe", "signal", "risk", "data_dependencies", "validation_report"],
+  "required": [
+    "id",
+    "version",
+    "universe",
+    "signal",
+    "risk",
+    "data_dependencies",
+    "validation_report"
+  ],
   "properties": {
     "id": {
       "type": "string",
@@ -17,76 +25,180 @@
       "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
       "description": "Semver of this strategy definition."
     },
-    "description": { "type": "string", "maxLength": 2000 },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
     "universe": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["symbols"],
+      "required": [
+        "symbols"
+      ],
       "properties": {
         "symbols": {
-          "type": "array", "minItems": 1, "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^[A-Z0-9]{2,15}(-[A-Z0-9]{2,10})?$" }
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{2,15}(-[A-Z0-9]{2,10})?$"
+          }
         },
         "exchanges": {
-          "type": "array", "uniqueItems": true,
-          "items": { "type": "string", "minLength": 2 }
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 2
+          }
         }
       }
     },
     "signal": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "parameters"],
+      "required": [
+        "kind",
+        "parameters",
+        "entry_rules",
+        "exit_rules"
+      ],
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["declarative-rules"],
+          "enum": [
+            "declarative-rules"
+          ],
           "description": "Only declarative rule sets in v1 (ADR-0005 open question: referenced pure functions may be added by a future schema major version)."
         },
         "parameters": {
           "type": "object",
           "description": "Named parameters the rules reference; values must be JSON scalars.",
-          "additionalProperties": { "type": ["number", "string", "boolean"] }
+          "additionalProperties": {
+            "type": [
+              "number",
+              "string",
+              "boolean"
+            ]
+          }
         },
-        "entry_rules": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rule" } },
-        "exit_rules": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rule" } }
-      },
-      "required": ["kind", "parameters", "entry_rules", "exit_rules"]
+        "entry_rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/rule"
+          }
+        },
+        "exit_rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/rule"
+          }
+        }
+      }
     },
     "risk": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["max_position_pct_equity", "stop_loss_pct", "max_gross_exposure_pct"],
+      "required": [
+        "max_position_pct_equity",
+        "stop_loss_pct",
+        "max_gross_exposure_pct"
+      ],
       "properties": {
-        "max_position_pct_equity": { "type": "number", "exclusiveMinimum": 0, "maximum": 20 },
-        "stop_loss_pct": { "type": "number", "exclusiveMinimum": 0, "maximum": 50 },
-        "max_gross_exposure_pct": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
-        "max_daily_loss_pct": { "type": "number", "exclusiveMinimum": 0, "maximum": 10 }
+        "max_position_pct_equity": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 20
+        },
+        "stop_loss_pct": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 50
+        },
+        "max_gross_exposure_pct": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        },
+        "max_daily_loss_pct": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 10
+        }
       }
     },
     "data_dependencies": {
-      "type": "array", "minItems": 1,
+      "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["series", "frequency"],
+        "required": [
+          "series",
+          "frequency"
+        ],
         "properties": {
-          "series": { "type": "string", "enum": ["ohlcv"] },
-          "frequency": { "type": "string", "enum": ["1d", "4h", "1h", "15m"] },
-          "lookback_bars": { "type": "integer", "minimum": 1, "maximum": 5000 }
+          "series": {
+            "type": "string",
+            "enum": [
+              "ohlcv",
+              "funding"
+            ]
+          },
+          "frequency": {
+            "type": "string",
+            "enum": [
+              "1d",
+              "4h",
+              "1h",
+              "15m"
+            ]
+          },
+          "lookback_bars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000
+          }
         }
       }
     },
     "validation_report": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "sha256", "signed_off_by", "signed_off_date", "result"],
+      "required": [
+        "path",
+        "sha256",
+        "signed_off_by",
+        "signed_off_date",
+        "result"
+      ],
       "properties": {
-        "path": { "type": "string", "description": "Workspace-relative path to the validation report." },
-        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "signed_off_by": { "type": "string", "minLength": 1 },
-        "signed_off_date": { "type": "string", "format": "date" },
-        "result": { "type": "string", "enum": ["pass"], "description": "Only passing strategies are loadable, by construction." }
+        "path": {
+          "type": "string",
+          "description": "Workspace-relative path to the validation report."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "signed_off_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signed_off_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "pass"
+          ],
+          "description": "Only passing strategies are loadable, by construction."
+        }
       }
     }
   },
@@ -94,22 +206,87 @@
     "rule": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["indicator", "operator", "operand"],
+      "required": [
+        "indicator",
+        "operator",
+        "operand"
+      ],
       "properties": {
-        "indicator": { "type": "string", "enum": ["close", "sma", "ema", "rsi", "atr", "high_n", "low_n"] },
-        "window": { "type": "integer", "minimum": 1, "maximum": 1000 },
-        "operator": { "type": "string", "enum": ["crosses_above", "crosses_below", "greater_than", "less_than"] },
+        "indicator": {
+          "type": "string",
+          "enum": [
+            "close",
+            "sma",
+            "ema",
+            "rsi",
+            "atr",
+            "high_n",
+            "low_n"
+          ]
+        },
+        "window": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "operator": {
+          "type": "string",
+          "enum": [
+            "crosses_above",
+            "crosses_below",
+            "greater_than",
+            "less_than"
+          ]
+        },
         "operand": {
           "oneOf": [
-            { "type": "number" },
-            { "type": "object", "additionalProperties": false,
-              "required": ["indicator"],
+            {
+              "type": "number"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "indicator"
+              ],
               "properties": {
-                "indicator": { "type": "string", "enum": ["close", "sma", "ema", "rsi", "atr", "high_n", "low_n"] },
-                "window": { "type": "integer", "minimum": 1, "maximum": 1000 }
+                "indicator": {
+                  "type": "string",
+                  "enum": [
+                    "close",
+                    "sma",
+                    "ema",
+                    "rsi",
+                    "atr",
+                    "high_n",
+                    "low_n"
+                  ]
+                },
+                "window": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "series": {
+                  "type": "string",
+                  "enum": [
+                    "price",
+                    "funding"
+                  ],
+                  "default": "price"
+                }
               }
             }
           ]
+        },
+        "series": {
+          "type": "string",
+          "enum": [
+            "price",
+            "funding"
+          ],
+          "default": "price",
+          "description": "Series the indicator reads. 'funding' = perp funding rates (per-event, e.g. 8h); only sma/close-style aggregations are meaningful."
         }
       }
     }
