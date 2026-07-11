@@ -101,11 +101,30 @@ class ForwardAssessment:
 
 
 def round_trips_for(records: list[AuditRecord], candidate_id: str) -> tuple[list[RoundTrip], bool]:
-    """(completed round trips, position still open?) for one candidate."""
-    fills = [
+    """(completed round trips, any position still open?) for one candidate.
+
+    Multi-symbol candidates (M12) hold independent positions per symbol; fills
+    are reconstructed per symbol so trips can never interleave across books.
+    """
+    all_fills = [
         r for r in records
         if r.strategy_id == candidate_id and r.tier == "candidate" and r.fill is not None
     ]
+    trips: list[RoundTrip] = []
+    any_open = False
+    for sym in sorted({r.symbol for r in all_fills}):
+        sym_trips, sym_open = _round_trips_one_symbol(
+            [r for r in all_fills if r.symbol == sym], candidate_id
+        )
+        trips.extend(sym_trips)
+        any_open = any_open or sym_open
+    trips.sort(key=lambda t: t.closed_at)
+    return trips, any_open
+
+
+def _round_trips_one_symbol(
+    fills: list[AuditRecord], candidate_id: str
+) -> tuple[list[RoundTrip], bool]:
     trips: list[RoundTrip] = []
     position = 0.0  # signed: positive long, negative short
     cost = proceeds = 0.0

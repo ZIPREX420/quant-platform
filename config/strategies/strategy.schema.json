@@ -136,6 +136,12 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "maximum": 10
+        },
+        "vol_target_annual_pct": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 300,
+          "description": "Optional live risk overlay (M12): position size is scaled by min(1, target/realized_annualized_vol). Never scales above 1x. Applied by the paper cycle only; validation measures unscaled rule returns."
         }
       }
     },

@@ -61,6 +61,26 @@ class CycleReport:
         )
 
 
+def _vol_scale(bars: list[Bar], interval: str, vol_target_annual_pct: float | None) -> float:
+    """Risk overlay (M12): scale exposure by min(1, target/realized vol).
+
+    Never scales ABOVE 1 (no leveraging up); insufficient data -> full scale
+    (the hard caps still bound everything).
+    """
+    if vol_target_annual_pct is None:
+        return 1.0
+    closes = [b.close for b in bars[-31:]]
+    if len(closes) < 11:
+        return 1.0
+    rets = [closes[i] / closes[i - 1] - 1.0 for i in range(1, len(closes))]
+    from statistics import pstdev  # noqa: PLC0415
+    per_year = (365 * 86400) / INTERVAL_SECONDS[interval]
+    realized = pstdev(rets) * (per_year ** 0.5) * 100.0
+    if realized <= 0:
+        return 1.0
+    return min(1.0, vol_target_annual_pct / realized)
+
+
 def _rules_use_funding(signal: dict) -> bool:
     for rule in list(signal["entry_rules"]) + list(signal["exit_rules"]):
         if rule.get("series") == "funding":
@@ -99,18 +119,15 @@ def _sanity_checks(bars: list[Bar], interval: str, now: datetime) -> list[CheckR
     return checks
 
 
-def _candidate_symbol_and_dep(candidate: LoadedCandidate) -> tuple[str, str, int]:
+def _candidate_symbols_and_dep(candidate: LoadedCandidate) -> tuple[list[str], str, int]:
+    """All universe symbols (M12: multi-symbol supported), shared ohlcv dependency."""
     symbols = candidate.definition["universe"]["symbols"]
-    if len(symbols) != 1:
-        raise CycleError(
-            f"{candidate.id}: cycle v1 requires exactly one symbol per candidate, got {symbols}"
-        )
     ohlcv = [d for d in candidate.definition["data_dependencies"] if d["series"] == "ohlcv"]
     if len(ohlcv) != 1:
         raise CycleError(f"{candidate.id}: exactly one ohlcv data dependency required")
     dep = ohlcv[0]
     lookback = int(dep.get("lookback_bars", DEFAULT_LOOKBACK))
-    return symbols[0], dep["frequency"], min(lookback + 2, 1000)
+    return list(symbols), dep["frequency"], min(lookback + 2, 1000)
 
 
 def run_cycle(
@@ -129,11 +146,11 @@ def run_cycle(
     if state is None:
         state = PaperState.fresh(starting_cash)
     account: PaperAccount = state.restore_account()
-    open_by_candidate: dict[str, OpenPosition] = {
-        p.candidate_id: p for p in state.open_positions
+    open_positions: dict[tuple[str, str], OpenPosition] = {
+        (p.candidate_id, p.symbol): p for p in state.open_positions
     }
     registered = {c.id for c in candidates}
-    orphans = sorted(cid for cid in open_by_candidate if cid not in registered)
+    orphans = sorted({cid for cid, _ in open_positions if cid not in registered})
     if orphans:
         raise CycleError(
             f"open paper positions belong to unregistered candidates {orphans} - "
@@ -152,31 +169,38 @@ def run_cycle(
         latest_price: dict[str, float] = {}
         market: dict[str, tuple[list[Bar], str]] = {}
         for candidate in candidates:
-            symbol, interval, limit = _candidate_symbol_and_dep(candidate)
-            if symbol not in market:
-                klines = client.klines(symbol, interval, limit=limit, include_unclosed=True, now=now)
-                closed = [k for k in klines if k.close_time <= now]
-                if len(closed) < 2:
-                    raise CycleError(f"{symbol}: fewer than 2 closed bars returned")
-                latest_price[symbol] = klines[-1].close  # forming bar close = live price
-                market[symbol] = (_to_rule_bars(closed), interval)
+            symbols, interval, limit = _candidate_symbols_and_dep(candidate)
+            for symbol in symbols:
+                if symbol not in market:
+                    klines = client.klines(
+                        symbol, interval, limit=limit, include_unclosed=True, now=now
+                    )
+                    closed = [k for k in klines if k.close_time <= now]
+                    if len(closed) < 2:
+                        raise CycleError(f"{symbol}: fewer than 2 closed bars returned")
+                    latest_price[symbol] = klines[-1].close  # forming bar close = live price
+                    market[symbol] = (_to_rule_bars(closed), interval)
 
         # daily kill-switch anchor: reset at UTC day rollover
         anchor_date, anchor_equity = state.day_anchor_date, state.day_anchor_equity
         if anchor_date != today or anchor_equity is None:
             anchor_date, anchor_equity = today, account.equity(latest_price) if latest_price else account.cash
 
+        funding_cache: dict[str, list] = {}
         for candidate in candidates:
-            symbol, interval, _ = _candidate_symbol_and_dep(candidate)
+          symbols, interval, _ = _candidate_symbols_and_dep(candidate)
+          for symbol in symbols:
             bars, _ = market[symbol]
             if _rules_use_funding(candidate.definition["signal"]):
-                events = client.funding_rates(symbol, limit=1000)
+                if symbol not in funding_cache:
+                    funding_cache[symbol] = client.funding_rates(symbol, limit=1000)
                 bars = attach_funding(
                     bars,
-                    [(e.funding_time.strftime("%Y-%m-%dT%H:%M"), e.rate) for e in events],
+                    [(e.funding_time.strftime("%Y-%m-%dT%H:%M"), e.rate)
+                     for e in funding_cache[symbol]],
                 )
 
-            position = open_by_candidate.get(candidate.id)
+            position = open_positions.get((candidate.id, symbol))
             decision = evaluate_candidate(
                 candidate.definition["signal"],
                 bars,
@@ -196,15 +220,18 @@ def run_cycle(
                 target = equity * candidate.definition["risk"]["max_position_pct_equity"] / 100.0
                 session = PaperTradingSession(candidate, account, audit)
                 open_side = Side.BUY if direction == "long" else Side.SELL
+                scale = _vol_scale(
+                    bars, interval, candidate.definition["risk"].get("vol_target_annual_pct")
+                )
                 record = session.process_signal(
-                    symbol, open_side, target, latest_price, anchor_equity, sanity=sanity
+                    symbol, open_side, target * scale, latest_price, anchor_equity, sanity=sanity
                 )
                 if record.approved and record.fill:
                     stop_frac = candidate.definition["risk"]["stop_loss_pct"] / 100.0
                     stop = record.fill["fill_price"] * (
                         (1.0 - stop_frac) if direction == "long" else (1.0 + stop_frac)
                     )
-                    open_by_candidate[candidate.id] = OpenPosition(
+                    open_positions[(candidate.id, symbol)] = OpenPosition(
                         candidate_id=candidate.id,
                         symbol=symbol,
                         direction=direction,
@@ -229,9 +256,9 @@ def run_cycle(
                 if record.approved and record.fill:
                     remaining = position.quantity - record.fill["quantity"]
                     if remaining <= 1e-10:
-                        del open_by_candidate[candidate.id]
+                        del open_positions[(candidate.id, symbol)]
                     else:  # risk engine shrank the close - keep the remainder tracked
-                        open_by_candidate[candidate.id] = position.model_copy(
+                        open_positions[(candidate.id, symbol)] = position.model_copy(
                             update={"quantity": remaining}
                         )
                 results.append(CandidateResult(
@@ -246,7 +273,7 @@ def run_cycle(
     equity = account.equity(latest_price) if latest_price else account.cash
     new_state = PaperState.from_account(
         account,
-        tuple(sorted(open_by_candidate.values(), key=lambda p: p.candidate_id)),
+        tuple(sorted(open_positions.values(), key=lambda p: (p.candidate_id, p.symbol))),
         cycle_count=state.cycle_count + 1,
         day_anchor_date=anchor_date,
         day_anchor_equity=anchor_equity,
