@@ -28,6 +28,7 @@ desk = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+    "langgraph>=0.4",  # ResearchGraph tests run against a stub LLM; only the graph engine is needed
 ]
 
 [build-system]
@@ -43,3 +44,4 @@ target-version = "py310"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]  # cross-test imports (tests.unit.*) under bare `pytest` as CI runs it

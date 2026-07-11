@@ -1,6 +1,8 @@
 """ResearchGraph: role sequence, state accumulation, staleness injection, budget guard."""
 import pytest
 
+pytest.importorskip("langgraph", reason="desk graph tests need the [dev] or [desk] extra")
+
 from quant_platform.orchestration.research_graph import BudgetExceeded, ResearchGraph
 
 CONTEXT_JSON = '{"symbol": "BTC-USD", "last_close": 64000.0}'
