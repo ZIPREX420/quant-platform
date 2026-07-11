@@ -7,10 +7,11 @@ from records, never assembled by hand; a forward-evidence report must embed
 this tool's output verbatim.
 
 Round-trip semantics: fills for one candidate are consumed in order; a trip
-opens on the first BUY and completes when the position returns to flat
-(partial closes aggregate into the same trip). Net return per trip =
-(sum of sell proceeds - sell fees) / (sum of buy cost + buy fees) - 1,
-i.e. exactly what the paper account experienced, costs included.
+opens on the first fill from flat (BUY = long trip, SELL = short trip, M12)
+and completes when the position returns to flat (partial closes aggregate
+into the same trip). Net return per trip is measured on the ENTRY leg's
+notional: long = (proceeds - cost) / cost; short = (proceeds - cost) /
+proceeds - exactly what the paper account experienced, costs included.
 """
 from __future__ import annotations
 
@@ -41,9 +42,12 @@ class RoundTrip:
     closed_at: datetime
     cost: float       # buy notional + buy fees
     proceeds: float   # sell notional - sell fees
+    direction: str = "long"
 
     @property
     def return_fraction(self) -> float:
+        if self.direction == "short":
+            return (self.proceeds - self.cost) / self.proceeds
         return self.proceeds / self.cost - 1.0
 
     def as_trade(self) -> Trade:
@@ -103,32 +107,42 @@ def round_trips_for(records: list[AuditRecord], candidate_id: str) -> tuple[list
         if r.strategy_id == candidate_id and r.tier == "candidate" and r.fill is not None
     ]
     trips: list[RoundTrip] = []
-    position = 0.0
+    position = 0.0  # signed: positive long, negative short
     cost = proceeds = 0.0
     opened_at: datetime | None = None
     symbol = ""
+    direction = "long"
     for r in fills:
         f = r.fill
+        flat = opened_at is None
         if r.side is Side.BUY:
-            if position <= 1e-12 and opened_at is None:
-                opened_at, symbol = r.ts, r.symbol
-            elif opened_at is None:
+            if flat:
+                opened_at, symbol, direction = r.ts, r.symbol, "long"
+            elif direction == "long" and position < -1e-12:
                 raise ForwardRecordError(
                     f"{candidate_id}: BUY while bookkeeping is inconsistent at {r.ts}"
                 )
             position += f["quantity"]
             cost += f["quantity"] * f["fill_price"] + f["fee"]
         else:
-            if opened_at is None or position <= 1e-12:
+            if flat:
+                opened_at, symbol, direction = r.ts, r.symbol, "short"
+            elif direction == "long" and position <= 1e-12:
                 raise ForwardRecordError(f"{candidate_id}: SELL without open position at {r.ts}")
             position -= f["quantity"]
             proceeds += f["quantity"] * f["fill_price"] - f["fee"]
-            if position <= 1e-10:
-                trips.append(RoundTrip(
-                    candidate_id=candidate_id, symbol=symbol,
-                    opened_at=opened_at, closed_at=r.ts, cost=cost, proceeds=proceeds,
-                ))
-                position, cost, proceeds, opened_at = 0.0, 0.0, 0.0, None
+        # a close that flips the sign is bookkeeping corruption, not a trip
+        if direction == "long" and position < -1e-10:
+            raise ForwardRecordError(f"{candidate_id}: SELL exceeds long position at {r.ts}")
+        if direction == "short" and position > 1e-10:
+            raise ForwardRecordError(f"{candidate_id}: BUY exceeds short position at {r.ts}")
+        if opened_at is not None and abs(position) <= 1e-10 and (cost > 0 and proceeds > 0):
+            trips.append(RoundTrip(
+                candidate_id=candidate_id, symbol=symbol,
+                opened_at=opened_at, closed_at=r.ts, cost=cost, proceeds=proceeds,
+                direction=direction,
+            ))
+            position, cost, proceeds, opened_at = 0.0, 0.0, 0.0, None
     return trips, opened_at is not None
 
 

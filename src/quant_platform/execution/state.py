@@ -34,7 +34,8 @@ class OpenPosition(BaseModel):
 
     candidate_id: str
     symbol: str
-    quantity: float = Field(gt=0)
+    direction: str = Field(default="long", pattern="^(long|short)$")
+    quantity: float = Field(gt=0, description="always positive; direction carries the sign")
     entry_price: float = Field(gt=0)
     entry_ts: datetime
     stop_price: float = Field(gt=0)
@@ -84,9 +85,10 @@ class PaperState(BaseModel):
         # engine metadata and account book must agree - refuse divergence
         for pos in open_positions:
             held = account.positions.get(pos.symbol, 0.0)
-            if abs(held - pos.quantity) > 1e-9:
+            expected = pos.quantity if pos.direction == "long" else -pos.quantity
+            if abs(held - expected) > 1e-9:
                 raise StateError(
-                    f"open-position metadata for {pos.symbol} ({pos.quantity}) does not "
+                    f"open-position metadata for {pos.symbol} ({pos.direction} {pos.quantity}) does not "
                     f"match account book ({held}) - refusing to persist inconsistent state"
                 )
         return cls(

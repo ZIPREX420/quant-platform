@@ -74,9 +74,25 @@ def test_other_candidates_and_validated_tier_excluded():
     assert len(trips) == 1 and not open_pos  # c2 and validated-tier ignored
 
 
-def test_sell_without_position_refused():
-    records = [fill_record("c1", Side.SELL, 100.0, 1.0, T0)]
-    with pytest.raises(ForwardRecordError, match="SELL without open position"):
+def test_sell_from_flat_opens_short_trip():
+    # M12: a SELL from flat is a short open, closed by a BUY
+    records = [
+        fill_record("c1", Side.SELL, 100.0, 1.0, T0),
+        fill_record("c1", Side.BUY, 90.0, 1.0, T0 + timedelta(hours=8)),
+    ]
+    trips, open_pos = round_trips_for(records, "c1")
+    assert len(trips) == 1 and not open_pos and trips[0].direction == "short"
+    # proceeds = 100 - 0.1 fee; cost = 90 + 0.09 fee; return on entry notional
+    expected = ((100 - 0.1) - (90 + 0.09)) / (100 - 0.1)
+    assert trips[0].return_fraction == pytest.approx(expected)
+
+
+def test_oversell_refused():
+    records = [
+        fill_record("c1", Side.BUY, 100.0, 1.0, T0),
+        fill_record("c1", Side.SELL, 100.0, 2.0, T0 + timedelta(hours=8)),
+    ]
+    with pytest.raises(ForwardRecordError, match="SELL exceeds long position"):
         round_trips_for(records, "c1")
 
 

@@ -116,8 +116,7 @@ class PaperTradingSession:
             )
             quantity = None
             if close_quantity is not None:
-                if side is not Side.SELL:
-                    raise ValueError("close_quantity is only valid for SELL orders")
+                # closing side of either direction: SELL closes long, BUY closes short.
                 # if risk shrank the order, close proportionally - never exceed approval
                 quantity = close_quantity * (decision.approved_notional / target_notional)
             fill = self.exchange.execute(approved_order, prices[symbol], quantity=quantity)

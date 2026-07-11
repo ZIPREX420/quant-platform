@@ -52,12 +52,20 @@ def evaluate_candidate(
         raise RuleError("in_position requires the position's stop_price")
 
     last = bars[-1]
+    direction = signal.get("direction", "long")
 
     if in_position:
-        if last.low <= stop_price:
+        stop_hit = (
+            last.high >= stop_price if direction == "short" else last.low <= stop_price
+        )
+        if stop_hit:
+            detail = (
+                f"bar high {last.high} >= stop {stop_price}" if direction == "short"
+                else f"bar low {last.low} <= stop {stop_price}"
+            )
             return SignalDecision(
                 action="exit",
-                reason=f"stop-breach: bar low {last.low} <= stop {stop_price}",
+                reason=f"stop-breach: {detail}",
                 bar_date=last.date,
                 close=last.close,
             )

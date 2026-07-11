@@ -69,12 +69,13 @@ def _positions_section(state: PaperState) -> str:
         return '<p class="muted">No open paper positions.</p>'
     rows = "".join(
         f"<tr><td>{_esc(p.candidate_id)}</td><td>{_esc(p.symbol)}</td>"
+        f"<td><span class='tag'>{_esc(getattr(p, 'direction', 'long'))}</span></td>"
         f"<td>{p.quantity:.8f}</td><td>{p.entry_price:.4f}</td><td>{p.stop_price:.4f}</td>"
         f"<td>{_esc(p.entry_ts.strftime('%Y-%m-%d %H:%M UTC'))}</td></tr>"
         for p in state.open_positions
     )
     return (
-        "<table><tr><th>candidate</th><th>symbol</th><th>quantity</th>"
+        "<table><tr><th>candidate</th><th>symbol</th><th>dir</th><th>quantity</th>"
         f"<th>entry</th><th>stop</th><th>entered</th></tr>{rows}</table>"
     )
 

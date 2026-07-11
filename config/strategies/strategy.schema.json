@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://project-genesis.local/schemas/strategy.schema.json",
   "title": "Strategy definition (ADR-0005 research-to-production contract)",
-  "description": "A validated strategy artifact produced by Research. The execution loader refuses any strategy whose validation_report is missing or unsigned. Risk parameters are enforced by the risk engine as hard caps, not targets. Schema v1.1 (2026-07-10): rules may read the perp funding series; funding accrual must be modeled by validation for perp instruments (protocol v1). Schema v1.2 (2026-07-10): validation_report.type distinguishes historical (protocol v1) from forward-evidence (protocol v2 addendum) passes; both carry the identical contract.",
+  "description": "A validated strategy artifact produced by Research. The execution loader refuses any strategy whose validation_report is missing or unsigned. Risk parameters are enforced by the risk engine as hard caps, not targets. Schema v1.1 (2026-07-10): rules may read the perp funding series; funding accrual must be modeled by validation for perp instruments (protocol v1). Schema v1.2 (2026-07-10): validation_report.type distinguishes historical (protocol v1) from forward-evidence (protocol v2 addendum) passes; both carry the identical contract. Schema v1.3 (2026-07-11): signal.direction long|short (default long) - short strategies sell to open and buy to close; stops sit above entry; funding sign flips (M12/ADR-0007 era).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -96,6 +96,15 @@
           "items": {
             "$ref": "#/$defs/rule"
           }
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "long",
+            "short"
+          ],
+          "default": "long",
+          "description": "Position direction. 'short': sell to open, buy to close, stop above entry, funding received when positive (perp instruments only)."
         }
       }
     },

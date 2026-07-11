@@ -190,20 +190,24 @@ def run_cycle(
                 continue
 
             price = latest_price[symbol]
+            direction = candidate.definition["signal"].get("direction", "long")
             if decision.action == "enter":
                 equity = account.equity(latest_price)
                 target = equity * candidate.definition["risk"]["max_position_pct_equity"] / 100.0
                 session = PaperTradingSession(candidate, account, audit)
+                open_side = Side.BUY if direction == "long" else Side.SELL
                 record = session.process_signal(
-                    symbol, Side.BUY, target, latest_price, anchor_equity, sanity=sanity
+                    symbol, open_side, target, latest_price, anchor_equity, sanity=sanity
                 )
                 if record.approved and record.fill:
+                    stop_frac = candidate.definition["risk"]["stop_loss_pct"] / 100.0
                     stop = record.fill["fill_price"] * (
-                        1.0 - candidate.definition["risk"]["stop_loss_pct"] / 100.0
+                        (1.0 - stop_frac) if direction == "long" else (1.0 + stop_frac)
                     )
                     open_by_candidate[candidate.id] = OpenPosition(
                         candidate_id=candidate.id,
                         symbol=symbol,
+                        direction=direction,
                         quantity=record.fill["quantity"],
                         entry_price=record.fill["fill_price"],
                         entry_ts=now,
@@ -217,8 +221,9 @@ def run_cycle(
                 ))
             else:  # exit
                 session = PaperTradingSession(candidate, account, audit)
+                close_side = Side.SELL if position.direction == "long" else Side.BUY
                 record = session.process_signal(
-                    symbol, Side.SELL, position.quantity * price, latest_price,
+                    symbol, close_side, position.quantity * price, latest_price,
                     anchor_equity, sanity=sanity, close_quantity=position.quantity,
                 )
                 if record.approved and record.fill:

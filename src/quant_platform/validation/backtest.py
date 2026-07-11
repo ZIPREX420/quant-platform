@@ -56,11 +56,20 @@ def run_backtest(
     - gap-through: if the bar OPENS at/below the stop, fill at the open (worse);
     - a rule exit fills AT the open and therefore preempts an intra-bar stop
       that would only have triggered later in the same bar (true event order).
+
+    signal.direction == "short" (schema v1.3) dispatches to the mirrored short
+    implementation; the long path below is unchanged since v1 so previously
+    signed reports remain byte-reproducible.
     """
     if signal.get("kind") != "declarative-rules":
         raise RuleError(f"unsupported signal kind: {signal.get('kind')}")
     if stop_loss_pct is not None and not 0 < stop_loss_pct < 100:
         raise ValueError(f"stop_loss_pct out of range: {stop_loss_pct}")
+    direction = signal.get("direction", "long")
+    if direction not in ("long", "short"):
+        raise RuleError(f"unsupported direction: {direction!r}")
+    if direction == "short":
+        return _run_backtest_short(signal, bars, fee_rate, slippage_rate, stop_loss_pct)
     if len(bars) < 3:
         return []
     entries = _all_true(signal["entry_rules"], bars)
@@ -119,6 +128,87 @@ def run_backtest(
     if in_position:
         last = bars[-1]
         close_position(last.open * (1 - slippage_rate), last.date, stopped=False, forced=True)
+    return trades
+
+
+def _run_backtest_short(
+    signal: dict,
+    bars: list[Bar],
+    fee_rate: float,
+    slippage_rate: float,
+    stop_loss_pct: float | None,
+) -> list[BacktestTrade]:
+    """Mirror of the long path for schema v1.3 short strategies.
+
+    Semantics (each the exact reflection of the long rule):
+    - entry SELLS at next-bar open, slipped DOWN (against the seller); exit
+      BUYS, slipped UP;
+    - stop sits ABOVE entry (entry * (1 + stop%)); triggered when bar.high
+      touches it; gap-through: bar OPENS at/above stop -> fill at open (worse);
+    - rule exit at the open preempts an intra-bar stop (same chronology);
+    - funding SIGN FLIPS: a short RECEIVES positive funding, PAYS negative;
+      boundary semantics identical (entry bar's event unpaid; exit-at-open
+      skips that event; intra-bar stop pays it);
+    - return accounting on ENTRY notional: gross = 1 - exit/entry; fees are
+      charged on both legs (entry leg 1x, exit leg (exit/entry)x); funding
+      accrues multiplicatively and is applied as pnl on entry notional.
+    """
+    if len(bars) < 3:
+        return []
+    entries = _all_true(signal["entry_rules"], bars)
+    exits = _all_true(signal["exit_rules"], bars)
+
+    trades: list[BacktestTrade] = []
+    in_position = False
+    entry_price = 0.0
+    entry_date = ""
+    stop_level = 0.0
+    funding_factor = 1.0  # multiplicative accrual: short RECEIVES positive funding
+
+    def close_position(exit_price: float, exit_date: str, stopped: bool, forced: bool = False):
+        ratio = exit_price / entry_price
+        gross = 1.0 - ratio
+        fees = fee_rate * (1.0 + ratio)
+        funding_pnl = funding_factor - 1.0
+        trades.append(
+            BacktestTrade(
+                entry_date=entry_date,
+                exit_date=exit_date,
+                entry_price=round(entry_price, 8),
+                exit_price=round(exit_price, 8),
+                return_fraction=round(gross - fees + funding_pnl, 8),
+                forced_exit=forced,
+                stopped_out=stopped,
+            )
+        )
+
+    for i in range(len(bars) - 1):  # signal at close i -> fill at open i+1
+        nxt = bars[i + 1]
+        if in_position:
+            exits_at_open = exits[i] or (
+                stop_loss_pct is not None and nxt.open >= stop_level
+            )
+            if exits_at_open:
+                stopped = stop_loss_pct is not None and nxt.open >= stop_level
+                close_position(nxt.open * (1 + slippage_rate), nxt.date, stopped=stopped)
+                in_position = False
+                continue
+            if nxt.funding is not None:
+                funding_factor *= 1.0 + nxt.funding  # short receives positive funding
+            if stop_loss_pct is not None and nxt.high >= stop_level:  # touched intra-bar
+                close_position(stop_level * (1 + slippage_rate), nxt.date, stopped=True)
+                in_position = False
+                continue
+        elif entries[i]:
+            entry_price = nxt.open * (1 - slippage_rate)
+            entry_date = nxt.date
+            in_position = True
+            funding_factor = 1.0
+            if stop_loss_pct is not None:
+                stop_level = entry_price * (1 + stop_loss_pct / 100.0)
+    if in_position:
+        last = bars[-1]
+        close_position(last.open * (1 + slippage_rate), last.date, stopped=False, forced=True)
     return trades
 
 
