@@ -1,6 +1,5 @@
 """M12 short-side semantics: every rule the exact mirror of the long path."""
 import json
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -89,7 +88,8 @@ class TestShortBacktest:
     def test_unknown_direction_refused(self):
         import pytest as _pytest
         from quant_platform.signals.rules import RuleError
-        bad = signal("long"); bad["direction"] = "sideways"
+        bad = signal("long")
+        bad["direction"] = "sideways"
         with _pytest.raises(RuleError, match="unsupported direction"):
             run_backtest(bad, [bar("d1", 100)] * 3)
 
@@ -109,7 +109,6 @@ class TestShortEvaluator:
 
 class TestShortCycleEndToEnd:
     def test_short_lifecycle_via_cycle(self, tmp_path):
-        from datetime import datetime, timezone
         from tests.unit.test_cycle import FakeClient, flat, paths, write_candidate
         from quant_platform.cycle import run_cycle
         from quant_platform.execution.session import ExecutionAudit
