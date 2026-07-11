@@ -247,30 +247,57 @@ class TestOutcomeLoopIntegration:
 
 
 class TestMarketStructureRecorder:
-    def test_snapshots_appended_when_client_supports_them(self, tmp_path):
-        import json
+    @staticmethod
+    def rich_fake(ohlc, oi_hours=3):
         from datetime import timedelta
         from quant_platform.data.binance_client import OpenInterestPoint, PremiumBar
 
         class RichFake(FakeClient):
             def open_interest_hist(self, symbol, period="1h", limit=30):
                 return [OpenInterestPoint(
-                    ts=T0, open_interest=100.0, open_interest_value=6_000_000.0)]
+                    ts=T0 + timedelta(hours=i), open_interest=100.0 + i,
+                    open_interest_value=6_000_000.0,
+                ) for i in range(oi_hours)][-limit:]
 
             def premium_index_klines(self, symbol, interval, limit=500,
                                      start_time_ms=None, include_unclosed=False, now=None):
                 return [PremiumBar(open_time=T0, close_time=T0 + timedelta(hours=1),
                                    open=-0.0004, high=-0.0002, low=-0.0008, close=-0.0006)]
 
+        return RichFake(ohlc)
+
+    def test_oi_window_and_basis_appended(self, tmp_path):
+        import json
         cands, state_path, audit_path = paths(tmp_path)
         write_candidate(cands)
-        feed = RichFake(flat(95, 10))
+        feed = self.rich_fake(flat(95, 10), oi_hours=3)
         run_cycle(cands, state_path, audit_path, client=feed, now=feed.now_after_bars())
-        lines = (tmp_path / "market-structure.jsonl").read_text().splitlines()
-        assert len(lines) == 1
-        row = json.loads(lines[0])
-        assert row["symbol"] == "BTCUSDT" and row["oi"] == 100.0
-        assert row["basis_close"] == -0.0006
+        rows = [json.loads(x) for x in
+                (tmp_path / "market-structure.jsonl").read_text().splitlines()]
+        oi_rows = [r for r in rows if "oi" in r]
+        basis_rows = [r for r in rows if "basis_close" in r]
+        assert len(oi_rows) == 3 and oi_rows[-1]["oi"] == 102.0  # full window captured
+        assert len(basis_rows) == 1 and basis_rows[0]["basis_close"] == -0.0006
+
+    def test_missed_cycles_caught_up_without_duplicates(self, tmp_path):
+        import json
+        cands, state_path, audit_path = paths(tmp_path)
+        write_candidate(cands)
+        feed = self.rich_fake(flat(95, 10), oi_hours=2)
+        run_cycle(cands, state_path, audit_path, client=feed, now=feed.now_after_bars())
+        # "PC was off": next cycle's window contains 4 new + 2 already-recorded points
+        feed = self.rich_fake(flat(95, 10), oi_hours=6)
+        run_cycle(cands, state_path, audit_path, client=feed, now=feed.now_after_bars())
+        rows = [json.loads(x) for x in
+                (tmp_path / "market-structure.jsonl").read_text().splitlines()]
+        oi_ts = [r["oi_ts"] for r in rows if "oi" in r]
+        assert len(oi_ts) == 6 and len(set(oi_ts)) == 6 and oi_ts == sorted(oi_ts)
+        # re-run with nothing new: no further OI rows
+        feed = self.rich_fake(flat(95, 10), oi_hours=6)
+        run_cycle(cands, state_path, audit_path, client=feed, now=feed.now_after_bars())
+        rows2 = [json.loads(x) for x in
+                 (tmp_path / "market-structure.jsonl").read_text().splitlines()]
+        assert len([r for r in rows2 if "oi" in r]) == 6
 
     def test_plain_fake_client_skips_gracefully(self, tmp_path):
         cands, state_path, audit_path = paths(tmp_path)

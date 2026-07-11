@@ -130,41 +130,63 @@ def _candidate_symbols_and_dep(candidate: LoadedCandidate) -> tuple[list[str], s
     return list(symbols), dep["frequency"], min(lookback + 2, 1000)
 
 
-def _record_market_structure(client, symbols, path: Path, now: datetime) -> int:
-    """Append per-cycle OI + basis snapshots (M13 forward accumulation).
+OI_CATCHUP_POINTS = 48  # 1h points fetched per cycle: PC downtime <= 2 days loses nothing
 
-    Open interest CANNOT be backfilled (venue keeps ~30 days), so every cycle
-    persists the current point. Best-effort per field; re-runs within a bar
-    produce duplicate rows - analysis dedupes on the source timestamps.
-    Returns the number of rows written.
+
+def _record_market_structure(client, symbols, path: Path, now: datetime) -> int:
+    """Append OI + basis points (M13 forward accumulation), gap-tolerant.
+
+    Open interest CANNOT be backfilled beyond ~30 days, so each cycle fetches
+    a 48-point window and writes only points NEWER than a per-symbol cursor
+    (sidecar .cursor.json): a missed cycle - or a whole offline weekend - is
+    caught up on the next run, with no duplicate rows. Basis is backfillable
+    at the venue, so only its latest closed value is snapshotted. Best-effort:
+    never affects the cycle result. Returns rows written.
     """
     import json as _json  # noqa: PLC0415
 
+    cursor_path = path.with_suffix(".cursor.json")
+    try:
+        cursors: dict = _json.loads(cursor_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cursors = {}
+
     rows = []
     for symbol in sorted(symbols):
-        row: dict = {"cycle_ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "symbol": symbol}
+        last_seen = cursors.get(symbol, "")
         try:
-            oi = client.open_interest_hist(symbol, period="1h", limit=1)
-            if oi:
-                row["oi"] = oi[-1].open_interest
-                row["oi_value"] = oi[-1].open_interest_value
-                row["oi_ts"] = oi[-1].ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+            for point in client.open_interest_hist(symbol, period="1h", limit=OI_CATCHUP_POINTS):
+                oi_ts = point.ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+                if oi_ts <= last_seen:
+                    continue
+                rows.append({
+                    "cycle_ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "symbol": symbol,
+                    "oi": point.open_interest, "oi_value": point.open_interest_value,
+                    "oi_ts": oi_ts,
+                })
+                last_seen = oi_ts
+            cursors[symbol] = last_seen
         except Exception:  # noqa: BLE001 - forward recording is best-effort
             pass
         try:
             pk = client.premium_index_klines(symbol, "1h", limit=2, now=now)
             if pk:
-                row["basis_close"] = pk[-1].close
-                row["basis_ts"] = pk[-1].close_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                rows.append({
+                    "cycle_ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "symbol": symbol,
+                    "basis_close": pk[-1].close,
+                    "basis_ts": pk[-1].close_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                })
         except Exception:  # noqa: BLE001
             pass
-        if len(row) > 2:
-            rows.append(row)
+
     if rows:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             for row in rows:
                 fh.write(_json.dumps(row) + "\n")
+        tmp = cursor_path.with_suffix(".json.tmp")
+        tmp.write_text(_json.dumps(cursors, indent=2), encoding="utf-8")
+        tmp.replace(cursor_path)
     return len(rows)
 
 
