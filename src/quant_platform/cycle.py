@@ -130,6 +130,44 @@ def _candidate_symbols_and_dep(candidate: LoadedCandidate) -> tuple[list[str], s
     return list(symbols), dep["frequency"], min(lookback + 2, 1000)
 
 
+def _record_market_structure(client, symbols, path: Path, now: datetime) -> int:
+    """Append per-cycle OI + basis snapshots (M13 forward accumulation).
+
+    Open interest CANNOT be backfilled (venue keeps ~30 days), so every cycle
+    persists the current point. Best-effort per field; re-runs within a bar
+    produce duplicate rows - analysis dedupes on the source timestamps.
+    Returns the number of rows written.
+    """
+    import json as _json  # noqa: PLC0415
+
+    rows = []
+    for symbol in sorted(symbols):
+        row: dict = {"cycle_ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "symbol": symbol}
+        try:
+            oi = client.open_interest_hist(symbol, period="1h", limit=1)
+            if oi:
+                row["oi"] = oi[-1].open_interest
+                row["oi_value"] = oi[-1].open_interest_value
+                row["oi_ts"] = oi[-1].ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:  # noqa: BLE001 - forward recording is best-effort
+            pass
+        try:
+            pk = client.premium_index_klines(symbol, "1h", limit=2, now=now)
+            if pk:
+                row["basis_close"] = pk[-1].close
+                row["basis_ts"] = pk[-1].close_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:  # noqa: BLE001
+            pass
+        if len(row) > 2:
+            rows.append(row)
+    if rows:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            for row in rows:
+                fh.write(_json.dumps(row) + "\n")
+    return len(rows)
+
+
 def run_cycle(
     candidates_dir: Path | str,
     state_path: Path | str,
@@ -266,6 +304,10 @@ def run_cycle(
                     approved=record.approved,
                     fill_price=record.fill["fill_price"] if record.fill else None,
                 ))
+        if market:  # M13: forward-accumulate what cannot be backfilled
+            _record_market_structure(
+                client, list(market), Path(audit_path).parent / "market-structure.jsonl", now
+            )
     finally:
         if owns_client:
             client.close()

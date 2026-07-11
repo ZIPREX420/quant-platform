@@ -96,3 +96,49 @@ def test_non_array_payload_refused():
     with make_client(handler) as client:
         with pytest.raises(BinanceClientError, match="expected a JSON array"):
             client.klines("BTCUSDT", "1h")
+
+
+class TestM13MarketStructure:
+    def test_premium_klines_accept_negative_values(self):
+        rows = [[T0 + i * H, "-0.0005", "-0.0002", "-0.0008", "-0.0006", "0",
+                 T0 + (i + 1) * H - 1, "0", 720, "0", "0", "0"] for i in range(3)]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/fapi/v1/premiumIndexKlines"
+            return httpx.Response(200, json=rows)
+
+        now = datetime.fromtimestamp((T0 + 10 * H) / 1000, tz=timezone.utc)
+        with make_client(handler) as client:
+            bars = client.premium_index_klines("BTCUSDT", "1h", limit=3, now=now)
+        assert len(bars) == 3 and bars[0].close == -0.0006
+
+    def test_premium_unclosed_dropped(self):
+        rows = [[T0 + i * H, "0", "0.0001", "-0.0001", "0", "0",
+                 T0 + (i + 1) * H - 1, "0", 720, "0", "0", "0"] for i in range(3)]
+
+        def handler(request):
+            return httpx.Response(200, json=rows)
+
+        now = datetime.fromtimestamp((T0 + 2 * H + H // 2) / 1000, tz=timezone.utc)
+        with make_client(handler) as client:
+            assert len(client.premium_index_klines("BTCUSDT", "1h", now=now)) == 2
+
+    def test_open_interest_parsed_and_sorted(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/futures/data/openInterestHist"
+            return httpx.Response(200, json=[
+                {"symbol": "BTCUSDT", "sumOpenInterest": "103937.5",
+                 "sumOpenInterestValue": "6665459777.99", "timestamp": T0 + H},
+                {"symbol": "BTCUSDT", "sumOpenInterest": "103852.9",
+                 "sumOpenInterestValue": "6656336654.42", "timestamp": T0},
+            ])
+
+        with make_client(handler) as client:
+            points = client.open_interest_hist("BTCUSDT")
+        assert len(points) == 2 and points[0].ts < points[1].ts
+        assert points[1].open_interest == 103937.5
+
+    def test_bad_oi_period_refused(self):
+        with make_client(lambda r: httpx.Response(200, json=[])) as client:
+            with pytest.raises(BinanceClientError, match="unsupported OI period"):
+                client.open_interest_hist("BTCUSDT", period="2h")

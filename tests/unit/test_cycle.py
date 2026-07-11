@@ -244,3 +244,38 @@ class TestOutcomeLoopIntegration:
     def test_empty_journal_short_circuits(self, tmp_path):
         from quant_platform.cli_cycle import resolve_due_outcomes
         assert resolve_due_outcomes(tmp_path, client=object()) == 0  # never touched
+
+
+class TestMarketStructureRecorder:
+    def test_snapshots_appended_when_client_supports_them(self, tmp_path):
+        import json
+        from datetime import timedelta
+        from quant_platform.data.binance_client import OpenInterestPoint, PremiumBar
+
+        class RichFake(FakeClient):
+            def open_interest_hist(self, symbol, period="1h", limit=30):
+                return [OpenInterestPoint(
+                    ts=T0, open_interest=100.0, open_interest_value=6_000_000.0)]
+
+            def premium_index_klines(self, symbol, interval, limit=500,
+                                     start_time_ms=None, include_unclosed=False, now=None):
+                return [PremiumBar(open_time=T0, close_time=T0 + timedelta(hours=1),
+                                   open=-0.0004, high=-0.0002, low=-0.0008, close=-0.0006)]
+
+        cands, state_path, audit_path = paths(tmp_path)
+        write_candidate(cands)
+        feed = RichFake(flat(95, 10))
+        run_cycle(cands, state_path, audit_path, client=feed, now=feed.now_after_bars())
+        lines = (tmp_path / "market-structure.jsonl").read_text().splitlines()
+        assert len(lines) == 1
+        row = json.loads(lines[0])
+        assert row["symbol"] == "BTCUSDT" and row["oi"] == 100.0
+        assert row["basis_close"] == -0.0006
+
+    def test_plain_fake_client_skips_gracefully(self, tmp_path):
+        cands, state_path, audit_path = paths(tmp_path)
+        write_candidate(cands)
+        feed = FakeClient(flat(95, 10))
+        r = run_cycle(cands, state_path, audit_path, client=feed, now=feed.now_after_bars())
+        assert r.cycle_count == 1  # cycle unaffected
+        assert not (tmp_path / "market-structure.jsonl").exists()
