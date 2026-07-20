@@ -1,0 +1,54 @@
+{
+  "id": "trend-w480-tracker",
+  "version": "0.1.0",
+  "description": "FALSIFICATION TRACKER (ADR-0006) for the standing meta-finding that long-only price patterns are dead post-2024. This is the ONLY cell that survived the H6 design grid on 2024+ data (sma480 cross, long leg: PF 1.24, +15.5% on 202 trades) - observed on heavily mined design data and therefore presumed to be selection noise. Its forward record decides. Registered at the M14 expansion; multiplicity recorded in the candidate ledger.",
+  "universe": {
+    "symbols": ["BTCUSDT"],
+    "exchanges": ["binance"]
+  },
+  "signal": {
+    "kind": "declarative-rules",
+    "direction": "long",
+    "parameters": {},
+    "entry_rules": [
+      {
+        "indicator": "close",
+        "operator": "crosses_above",
+        "operand": {
+          "indicator": "sma",
+          "window": 480
+        }
+      }
+    ],
+    "exit_rules": [
+      {
+        "indicator": "close",
+        "operator": "crosses_below",
+        "operand": {
+          "indicator": "sma",
+          "window": 480
+        }
+      }
+    ]
+  },
+  "risk": {
+    "max_position_pct_equity": 5,
+    "stop_loss_pct": 10,
+    "max_gross_exposure_pct": 50,
+    "max_daily_loss_pct": 2
+  },
+  "data_dependencies": [
+    {
+      "series": "ohlcv",
+      "frequency": "1h",
+      "lookback_bars": 482
+    }
+  ],
+  "tracking": {
+    "prediction": "PREDICTED TO UNDERPERFORM the benchmark-btc-hold control net of costs: the H6 design cell it comes from is presumed mined noise from the long-only family (four signed failures + the 7-investigation meta-finding). If its forward record instead clearly BEATS the benchmark over >=6 months, the meta-finding is falsified and the trend family reopens for fresh pre-registered design on unmined data.",
+    "registered_by": "Seppe Willemsens",
+    "registered_date": "2026-07-11",
+    "hypothesis": "H6",
+    "journal_ref": "experiments/notebooks/2026-07-11-h6-symmetric-trend-design.md"
+  }
+}

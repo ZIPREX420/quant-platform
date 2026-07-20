@@ -1,0 +1,47 @@
+{
+  "id": "benchmark-btc-hold",
+  "version": "0.1.0",
+  "description": "CONTROL ARM (ADR-0006, registered at the M14 evidence-throughput expansion). Always-long BTC at the standard 5% allocation with the maximum permitted crash stop. Exists so every other candidate's forward record has a passive baseline: a future forward-evidence pass must beat THIS, not just zero, or it is market beta in a costume. Not a trading recommendation.",
+  "universe": {
+    "symbols": ["BTCUSDT"],
+    "exchanges": ["binance"]
+  },
+  "signal": {
+    "kind": "declarative-rules",
+    "direction": "long",
+    "parameters": {},
+    "entry_rules": [
+      {
+        "indicator": "close",
+        "operator": "greater_than",
+        "operand": 0.001
+      }
+    ],
+    "exit_rules": [
+      {
+        "indicator": "close",
+        "operator": "less_than",
+        "operand": 0.001
+      }
+    ]
+  },
+  "risk": {
+    "max_position_pct_equity": 5,
+    "stop_loss_pct": 50,
+    "max_gross_exposure_pct": 50,
+    "max_daily_loss_pct": 2
+  },
+  "data_dependencies": [
+    {
+      "series": "ohlcv",
+      "frequency": "1h",
+      "lookback_bars": 50
+    }
+  ],
+  "tracking": {
+    "prediction": "This candidate earns approximately BTC beta minus one round trip of costs: its forward record mirrors BTC's price path at 5% allocation, re-entering after any 50% crash stop. It is the bar to clear - a candidate qualifying under protocol v2 while underperforming this benchmark over the same window is beta plus noise and must not be promoted.",
+    "registered_by": "Seppe Willemsens",
+    "registered_date": "2026-07-11",
+    "journal_ref": "docs/research/profitability-review-2026-07-11.md"
+  }
+}
