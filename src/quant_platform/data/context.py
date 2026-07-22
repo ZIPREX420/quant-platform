@@ -6,7 +6,7 @@ validated ADR-0004 spike (experiments/prototypes/research-desk-spike).
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from statistics import mean, pstdev
 
 from pydantic import BaseModel, ConfigDict
