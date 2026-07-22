@@ -1,0 +1,79 @@
+{
+  "id": "flow-gated-trend-short",
+  "version": "0.1.0",
+  "description": "Composite flow+trend family (ADR-0006 candidate tier, ledger row 5): short when the 1h EMA-60 is below EMA-240 AND funding SMA(9 events) is negative - the trend leg supplies direction, the funding leg supplies the 'informed shorts' confirmation from the signed sol-funding-carry-v0.1.0 regime finding. Materially different hypothesis from the burned long-only MA family: opposite side, funding-gated, designed on SOL. Design-stage IS screen (2026-07-22, post-2024 slice, protocol cost floors, a-priori config, no parameter search - experiments/notebooks/2026-07-22-family-screen.md): SOL PF 1.21 / 15 trades-yr / +8.9% compounded; BTC PF 0.49 and deliberately included as the in-candidate control. Registered 2026-07-22 on operator instruction; evidence clock starts at first cycle execution.",
+  "universe": {
+    "symbols": [
+      "SOLUSDT",
+      "ETHUSDT",
+      "BTCUSDT"
+    ],
+    "exchanges": [
+      "binance"
+    ]
+  },
+  "signal": {
+    "kind": "declarative-rules",
+    "direction": "short",
+    "parameters": {
+      "ema_fast": 60,
+      "ema_slow": 240,
+      "funding_sma_events": 9
+    },
+    "entry_rules": [
+      {
+        "indicator": "ema",
+        "window": 60,
+        "operator": "less_than",
+        "operand": {
+          "indicator": "ema",
+          "window": 240
+        }
+      },
+      {
+        "indicator": "sma",
+        "window": 9,
+        "series": "funding",
+        "operator": "less_than",
+        "operand": 0
+      }
+    ],
+    "exit_rules": [
+      {
+        "indicator": "ema",
+        "window": 60,
+        "operator": "greater_than",
+        "operand": {
+          "indicator": "ema",
+          "window": 240
+        }
+      }
+    ]
+  },
+  "risk": {
+    "max_position_pct_equity": 5,
+    "stop_loss_pct": 5,
+    "max_gross_exposure_pct": 50,
+    "max_daily_loss_pct": 2,
+    "vol_target_annual_pct": 60
+  },
+  "data_dependencies": [
+    {
+      "series": "ohlcv",
+      "frequency": "1h",
+      "lookback_bars": 500
+    },
+    {
+      "series": "funding",
+      "frequency": "1h",
+      "lookback_bars": 500
+    }
+  ],
+  "tracking": {
+    "prediction": "Forward paper record is NET POSITIVE overall at protocol costs, driven by SOLUSDT; BTCUSDT contributes at best flat (its IS screen failed at PF 0.49 and is included deliberately as an in-candidate control). Basis: the signed regime finding that persistent negative funding post-2024 marks informed short positioning - a downtrend CONFIRMED by negative funding should continue more often than an unconditioned downtrend. Falsified if, after >=40 round trips, the aggregate record is net-negative or SOL alone shows PF < 1.0: that would mean the funding gate adds no information beyond trend, and the informed-shorts reading of H1 is wrong. Note the carry headwind is real (a short during negative funding PAYS funding), so any profit must come from price continuation exceeding both costs and carry - making this a strict test.",
+    "registered_by": "Seppe Willemsens",
+    "registered_date": "2026-07-22",
+    "hypothesis": "H1-inverse",
+    "journal_ref": "experiments/notebooks/2026-07-22-family-screen.md"
+  }
+}

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-INDICATORS = ("close", "sma", "ema", "rsi", "atr", "high_n", "low_n")
+INDICATORS = ("close", "sma", "ema", "rsi", "atr", "high_n", "low_n", "hour_utc")
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,12 @@ def _series(
     n = len(bars)
     if kind == "close":
         return list(closes)
+    if kind == "hour_utc":
+        # Bar's UTC open hour as a float series (0.0-23.0). Window-free.
+        # Intended as an entry FILTER (e.g. hour_utc greater_than 16.5 AND
+        # hour_utc less_than 21) - the 2026-07-22 family screen measured
+        # 7-13 bps/h intraday structure: real, but below costs standalone.
+        return [float(int(b.date[11:13])) for b in bars]
     if window is None:
         raise RuleError(f"indicator '{kind}' requires a window")
     out: list[float | None] = [None] * n
