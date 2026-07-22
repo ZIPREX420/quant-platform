@@ -167,6 +167,7 @@ def render_dashboard(
     journal: DecisionJournal,
     ledger_rows: list[dict],
     generated_at: datetime | None = None,
+    equity_history: list[dict] | None = None,
 ) -> str:
     generated_at = generated_at or datetime.now(timezone.utc)
     banner = ""
@@ -193,7 +194,18 @@ def render_dashboard(
     else:
         kpis = '<p class="muted">No paper state yet - run m9-cycle.bat for the first time.</p>'
 
-    equity_points = [r.equity_after for r in audit_records if r.equity_after is not None]
+    # Per-cycle history (one mark per cycle) is the real curve; the audit
+    # trail's equity_after (one point per FILL) is only a fallback for
+    # workspaces predating the equity-history sidecar.
+    if equity_history:
+        equity_points = [
+            float(row["equity"]) for row in equity_history
+            if isinstance(row.get("equity"), (int, float))
+        ]
+        equity_label = f"Equity (per cycle, {len(equity_points)} marks)"
+    else:
+        equity_points = [r.equity_after for r in audit_records if r.equity_after is not None]
+        equity_label = "Equity"
 
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
@@ -205,7 +217,7 @@ def render_dashboard(
 zero validated strategies &#183; not financial advice</p></header>
 <main>
 <section><h2>Account</h2>{kpis}</section>
-<section><h2>Equity</h2>{_equity_svg(equity_points)}</section>
+<section><h2>{equity_label}</h2>{_equity_svg(equity_points)}</section>
 <section><h2>Open positions</h2>{_positions_section(state) if state else '<p class="muted">&#8212;</p>'}</section>
 <section><h2>Recent execution decisions</h2>{_audit_section(audit_records)}</section>
 <section><h2>Registered candidates</h2>{_candidates_section(candidates, audit_records)}</section>

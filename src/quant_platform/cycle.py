@@ -366,6 +366,18 @@ def run_cycle(
             client.close()
 
     equity = account.equity(latest_price) if latest_price else account.cash
+    # One equity point per cycle (the dashboard's per-cycle curve; fills alone
+    # are far too sparse for slow trackers - the audit trail held ONE fill
+    # after 86 cycles). Append-only sidecar, same pattern as funding accruals.
+    _append_jsonl(
+        Path(audit_path).parent / "equity-history.jsonl",
+        [{
+            "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "cycle": state.cycle_count + 1,
+            "equity": round(equity, 8),
+            "cash": round(account.cash, 8),
+        }],
+    )
     new_state = PaperState.from_account(
         account,
         tuple(sorted(open_positions.values(), key=lambda p: (p.candidate_id, p.symbol))),

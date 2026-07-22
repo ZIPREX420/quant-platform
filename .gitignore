@@ -9,6 +9,11 @@ node_modules/
 *.log
 .DS_Store
 /data/
+# Belt-and-suspenders: never commit runtime trading state or any secrets
+# directory, even though both normally live at the workspace level.
+/reports/
+secrets/
+*.bat
 *.sqlite
 .pytest_cache/
 .mypy_cache/

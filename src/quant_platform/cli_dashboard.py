@@ -33,6 +33,25 @@ def parse_ledger(path: Path) -> list[dict]:
     return rows
 
 
+def read_equity_history(path: Path) -> list[dict]:
+    """Per-cycle equity marks (equity-history.jsonl). Missing file -> [];
+    malformed lines are skipped - the dashboard must render regardless."""
+    if not path.is_file():
+        return []
+    import json
+    rows: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
 def generate(repo_root: Path, workspace_root: Path, out_path: Path) -> Path:
     reports = workspace_root / "reports"
     try:
@@ -48,8 +67,12 @@ def generate(repo_root: Path, workspace_root: Path, out_path: Path) -> Path:
         candidates = []
     journal = DecisionJournal(reports / "research" / "journal.jsonl")
     ledger = parse_ledger(workspace_root / "docs" / "validation" / "signed-reports.md")
+    equity_history = read_equity_history(reports / "research" / "equity-history.jsonl")
 
-    html = render_dashboard(state, audit_records, candidates, journal, ledger)
+    html = render_dashboard(
+        state, audit_records, candidates, journal, ledger,
+        equity_history=equity_history,
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_suffix(".html.tmp")
     tmp.write_text(html, encoding="utf-8")
