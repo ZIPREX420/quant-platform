@@ -70,6 +70,38 @@ def check_audit_trail(path: Path | str) -> StatusCheck:
                        {"records": len(lines), "rejections": rejected})
 
 
+def check_paper_state(path: Path | str, max_age_hours: float = 3.0) -> StatusCheck:
+    """The forward-evidence clock only ticks while the paper cycle runs.
+
+    A missing file is a legitimate pre-M9 or fresh workspace; a PRESENT state
+    file older than ``max_age_hours`` (default 3x the hourly cadence) means
+    the heartbeat stopped - every stale hour is forward evidence lost, so
+    this check is deliberately DEGRADED, not a warning.
+    """
+    path = Path(path)
+    if not path.exists():
+        return StatusCheck("paper_cycle", True, "no paper state yet (cycle never run)",
+                           {"cycles": 0})
+    import json
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        updated = datetime.fromisoformat(str(payload["updated_at"]).replace("Z", "+00:00"))
+        cycles = int(payload.get("cycle_count", 0))
+    except (OSError, ValueError, KeyError) as exc:
+        return StatusCheck("paper_cycle", False, f"state file unreadable: {exc}")
+    age_h = (datetime.now(timezone.utc) - updated).total_seconds() / 3600
+    metrics = {"cycles": cycles, "age_hours": round(age_h, 2)}
+    if age_h > max_age_hours:
+        return StatusCheck(
+            "paper_cycle", False,
+            f"last cycle {age_h:.1f}h ago (> {max_age_hours:.0f}h) - the "
+            f"forward-evidence clock is NOT ticking; restart the m9 cycle schedule",
+            metrics,
+        )
+    return StatusCheck("paper_cycle", True,
+                       f"cycle {cycles}, last ran {age_h:.1f}h ago", metrics)
+
+
 def check_cache(directory: Path | str, max_age_hours: float = 48.0) -> StatusCheck:
     directory = Path(directory)
     files = list(directory.glob("*.json")) if directory.exists() else []
@@ -90,6 +122,8 @@ def run_all(
     journal_path: str = "reports/research/journal.jsonl",
     audit_path: str = "reports/research/executions.jsonl",
     cache_dir: str = "datasets/cache",
+    paper_state_path: str = "reports/research/paper-state.json",
+    max_cycle_age_hours: float = 3.0,
 ) -> list[StatusCheck]:
     return [
         check_http_service("openbb_rest", f"{openbb_url}/openapi.json"),
@@ -97,6 +131,7 @@ def run_all(
         check_journal(journal_path),
         check_audit_trail(audit_path),
         check_cache(cache_dir),
+        check_paper_state(paper_state_path, max_cycle_age_hours),
     ]
 
 
@@ -111,9 +146,12 @@ def main() -> None:
     parser.add_argument("--journal", default="reports/research/journal.jsonl")
     parser.add_argument("--audit", default="reports/research/executions.jsonl")
     parser.add_argument("--cache-dir", default="datasets/cache")
+    parser.add_argument("--paper-state", default="reports/research/paper-state.json")
+    parser.add_argument("--max-cycle-age-hours", type=float, default=3.0)
     args = parser.parse_args()
 
-    checks = run_all(args.openbb_url, args.quantdinger_url, args.journal, args.audit, args.cache_dir)
+    checks = run_all(args.openbb_url, args.quantdinger_url, args.journal, args.audit,
+                     args.cache_dir, args.paper_state, args.max_cycle_age_hours)
     degraded = [c for c in checks if not c.healthy]
     for c in checks:
         print(json.dumps({"check": c.name, "healthy": c.healthy, "detail": c.detail, **c.metrics}))

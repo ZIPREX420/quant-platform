@@ -169,6 +169,17 @@ def render_dashboard(
     generated_at: datetime | None = None,
 ) -> str:
     generated_at = generated_at or datetime.now(timezone.utc)
+    banner = ""
+    if state is not None:
+        age_h = (generated_at - state.updated_at).total_seconds() / 3600
+        if age_h > 3.0:
+            banner = (
+                '<div style="background:#a40e26;color:#fff;padding:10px 24px;'
+                'font-size:13px;font-weight:600">&#9888; CYCLE STALE - last paper '
+                f'cycle ran {age_h:.1f}h ago (&gt; 3h). The forward-evidence clock '
+                '(protocol v2, F1) is NOT ticking. Check the m9 schedule / machine '
+                'uptime, then run quant-status.</div>'
+            )
     if state is not None:
         equity_now = state.last_equity if state.last_equity is not None else state.cash
         ret = (equity_now / state.starting_cash - 1.0) * 100.0
@@ -188,6 +199,7 @@ def render_dashboard(
 <html lang="en"><head><meta charset="utf-8">
 <title>PROJECT GENESIS - paper desk dashboard</title><style>{_CSS}</style></head>
 <body>
+{banner}
 <header><h1>PROJECT GENESIS &#8212; paper trading desk</h1>
 <p>generated {generated_at.strftime('%Y-%m-%d %H:%M UTC')} &#183; paper tier only &#183;
 zero validated strategies &#183; not financial advice</p></header>

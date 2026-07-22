@@ -20,6 +20,7 @@ from pathlib import Path
 from quant_platform.data.binance_client import BinanceClient, KlineBar
 from quant_platform.execution.paper import PaperAccount
 from quant_platform.execution.session import ExecutionAudit, PaperTradingSession
+from quant_platform.execution.funding import accrue_open_positions
 from quant_platform.execution.state import OpenPosition, PaperState, StateStore
 from quant_platform.risk.engine import CheckResult, Side
 from quant_platform.signals.evaluator import attach_funding, evaluate_candidate
@@ -128,6 +129,16 @@ def _candidate_symbols_and_dep(candidate: LoadedCandidate) -> tuple[list[str], s
     dep = ohlcv[0]
     lookback = int(dep.get("lookback_bars", DEFAULT_LOOKBACK))
     return list(symbols), dep["frequency"], min(lookback + 2, 1000)
+
+
+def _append_jsonl(path: Path, rows: list[dict]) -> None:
+    """Append rows to a JSONL sidecar (mkdir on first write)."""
+    import json as _json  # noqa: PLC0415
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(_json.dumps(row) + "\n")
 
 
 OI_CATCHUP_POINTS = 48  # 1h points fetched per cycle: PC downtime <= 2 days loses nothing
@@ -241,12 +252,32 @@ def run_cycle(
                     latest_price[symbol] = klines[-1].close  # forming bar close = live price
                     market[symbol] = (_to_rule_bars(closed), interval)
 
+        funding_cache: dict[str, list] = {}
+
+        # Accrue perp funding on every held position (ADR-0007 cost tier).
+        # Cursor-based per position, so downtime is caught up like M13's OI
+        # capture; failures leave the cursor unmoved and retry next cycle.
+        if open_positions:
+            for symbol in sorted({p.symbol for p in open_positions.values()}):
+                if symbol not in funding_cache:
+                    try:
+                        funding_cache[symbol] = client.funding_rates(symbol, limit=1000)
+                    except Exception:  # noqa: BLE001 - accrual retries next cycle
+                        funding_cache[symbol] = []
+            accrued, accrual_rows, cash_delta = accrue_open_positions(
+                open_positions, funding_cache, market, latest_price, now
+            )
+            if accrual_rows:
+                account.cash += cash_delta
+                open_positions.update(accrued)
+                _append_jsonl(
+                    Path(audit_path).parent / "funding-accruals.jsonl", accrual_rows
+                )
+
         # daily kill-switch anchor: reset at UTC day rollover
         anchor_date, anchor_equity = state.day_anchor_date, state.day_anchor_equity
         if anchor_date != today or anchor_equity is None:
             anchor_date, anchor_equity = today, account.equity(latest_price) if latest_price else account.cash
-
-        funding_cache: dict[str, list] = {}
         for candidate in candidates:
           symbols, interval, _ = _candidate_symbols_and_dep(candidate)
           for symbol in symbols:

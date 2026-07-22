@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from quant_platform.execution.paper import PaperAccount
 
-STATE_VERSION = 1
+STATE_VERSION = 2
 
 
 class StateError(Exception):
@@ -40,6 +40,11 @@ class OpenPosition(BaseModel):
     entry_ts: datetime
     stop_price: float = Field(gt=0)
     entry_fill_id: str
+    # v2 (funding accrual, ADR-0007 cost tier). Cursor of the last applied
+    # funding event; None = nothing accrued yet (accrual starts at entry_ts).
+    last_funding_ts: datetime | None = None
+    # Cumulative net funding received (+) / paid (-) by this position.
+    funding_net: float = 0.0
 
 
 class PaperState(BaseModel):
@@ -126,7 +131,12 @@ class StateStore:
                 f"REFUSING to reset automatically - inspect the file (and the last "
                 f"audit records in executions.jsonl) and repair or archive it manually."
             ) from exc
-        if state.version != STATE_VERSION:
+        if state.version == 1:
+            # v1 -> v2 migration: the only additions are the per-position
+            # funding fields, which default (no accrual yet). Documented here
+            # so the upgrade is an explicit decision, not silent drift.
+            state = state.model_copy(update={"version": STATE_VERSION})
+        elif state.version != STATE_VERSION:
             raise StateError(
                 f"paper state version {state.version} != supported {STATE_VERSION}; "
                 f"migrate explicitly before running."
