@@ -102,6 +102,72 @@ def check_paper_state(path: Path | str, max_age_hours: float = 3.0) -> StatusChe
                        f"cycle {cycles}, last ran {age_h:.1f}h ago", metrics)
 
 
+def _parse_ts(value) -> datetime | None:
+    """Parse an ISO-ish timestamp (state cursor or ledger funding_time) to aware UTC."""
+    if value in (None, ""):
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def check_funding_ledger(
+    paper_state_path: Path | str,
+    ledger_path: Path | str = "reports/research/funding-accruals.jsonl",
+) -> StatusCheck:
+    """The funding-accrual ledger must never fall BEHIND the persisted state.
+
+    Per open position, the ledger's ``cash_delta`` summed over rows up to the
+    position's cursor (``last_funding_ts``) must equal its persisted
+    ``funding_net``. Rows past the cursor (a crashed cycle awaiting reconcile on
+    the next load) are excluded, so they raise no false alarm; a shortfall means a
+    row the state already absorbed is missing from the forward-evidence ledger,
+    which is DEGRADED.
+    """
+    paper_state_path = Path(paper_state_path)
+    if not paper_state_path.exists():
+        return StatusCheck("funding_ledger", True, "no paper state yet", {"positions": 0})
+    import json
+    try:
+        payload = json.loads(paper_state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return StatusCheck("funding_ledger", False, f"state unreadable: {exc}")
+    positions = payload.get("open_positions", [])
+
+    rows: list[dict] = []
+    ledger_path = Path(ledger_path)
+    if ledger_path.exists():
+        for line in ledger_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+
+    issues = []
+    for pos in positions:
+        key = (pos.get("candidate_id"), pos.get("symbol"))
+        cursor = _parse_ts(pos.get("last_funding_ts"))
+        net = float(pos.get("funding_net", 0.0))
+        logged = 0.0
+        for row in rows:
+            if (row.get("candidate_id"), row.get("symbol")) != key:
+                continue
+            ts = _parse_ts(row.get("funding_time"))
+            if cursor is not None and ts is not None and ts <= cursor:
+                logged += float(row.get("cash_delta", 0.0))
+        if abs(logged - net) > 1e-6:
+            issues.append(f"{pos.get('symbol')}: ledger {logged:.8f} vs funding_net {net:.8f}")
+    if issues:
+        return StatusCheck("funding_ledger", False,
+                           "funding record diverges - " + "; ".join(issues),
+                           {"positions": len(positions)})
+    return StatusCheck("funding_ledger", True,
+                       f"{len(positions)} position(s) consistent with ledger",
+                       {"positions": len(positions)})
+
+
 def check_cache(directory: Path | str, max_age_hours: float = 48.0) -> StatusCheck:
     directory = Path(directory)
     files = list(directory.glob("*.json")) if directory.exists() else []
@@ -124,6 +190,7 @@ def run_all(
     cache_dir: str = "datasets/cache",
     paper_state_path: str = "reports/research/paper-state.json",
     max_cycle_age_hours: float = 3.0,
+    funding_ledger_path: str = "reports/research/funding-accruals.jsonl",
 ) -> list[StatusCheck]:
     return [
         check_http_service("openbb_rest", f"{openbb_url}/openapi.json"),
@@ -132,6 +199,7 @@ def run_all(
         check_audit_trail(audit_path),
         check_cache(cache_dir),
         check_paper_state(paper_state_path, max_cycle_age_hours),
+        check_funding_ledger(paper_state_path, funding_ledger_path),
     ]
 
 
@@ -148,10 +216,12 @@ def main() -> None:
     parser.add_argument("--cache-dir", default="datasets/cache")
     parser.add_argument("--paper-state", default="reports/research/paper-state.json")
     parser.add_argument("--max-cycle-age-hours", type=float, default=3.0)
+    parser.add_argument("--funding-ledger", default="reports/research/funding-accruals.jsonl")
     args = parser.parse_args()
 
     checks = run_all(args.openbb_url, args.quantdinger_url, args.journal, args.audit,
-                     args.cache_dir, args.paper_state, args.max_cycle_age_hours)
+                     args.cache_dir, args.paper_state, args.max_cycle_age_hours,
+                     args.funding_ledger)
     degraded = [c for c in checks if not c.healthy]
     for c in checks:
         print(json.dumps({"check": c.name, "healthy": c.healthy, "detail": c.detail, **c.metrics}))

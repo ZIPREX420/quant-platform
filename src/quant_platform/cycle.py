@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from quant_platform.data.binance_client import BinanceClient, KlineBar
-from quant_platform.execution.funding import accrue_open_positions
+from quant_platform.execution.funding import accrue_open_positions, reconcile_from_ledger
 from quant_platform.execution.paper import PaperAccount
 from quant_platform.execution.session import ExecutionAudit, PaperTradingSession
 from quant_platform.execution.state import OpenPosition, PaperState, StateStore
@@ -131,14 +131,40 @@ def _candidate_symbols_and_dep(candidate: LoadedCandidate) -> tuple[list[str], s
     return list(symbols), dep["frequency"], min(lookback + 2, 1000)
 
 
-def _append_jsonl(path: Path, rows: list[dict]) -> None:
-    """Append rows to a JSONL sidecar (mkdir on first write)."""
+def _append_jsonl(path: Path, rows: list[dict], durable: bool = False) -> None:
+    """Append rows to a JSONL sidecar (mkdir on first write).
+
+    With ``durable=True`` the write is flushed and fsync'd before returning, so
+    the rows are on disk before whatever runs next - used for the funding-accrual
+    write-ahead log, which must survive a crash during the state save it precedes.
+    """
     import json as _json
+    import os as _os
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         for row in rows:
             fh.write(_json.dumps(row) + "\n")
+        if durable:
+            fh.flush()
+            _os.fsync(fh.fileno())
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    """Read a JSONL sidecar; missing file -> []; malformed lines are skipped."""
+    import json as _json
+
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(_json.loads(line))
+        except ValueError:
+            continue
+    return rows
 
 
 OI_CATCHUP_POINTS = 48  # 1h points fetched per cycle: PC downtime <= 2 days loses nothing
@@ -177,7 +203,7 @@ def _record_market_structure(client, symbols, path: Path, now: datetime) -> int:
                 })
                 last_seen = oi_ts
             cursors[symbol] = last_seen
-        except Exception:
+        except Exception:  # noqa: BLE001 - forward recording is best-effort
             pass
         try:
             pk = client.premium_index_klines(symbol, "1h", limit=2, now=now)
@@ -187,7 +213,7 @@ def _record_market_structure(client, symbols, path: Path, now: datetime) -> int:
                     "basis_close": pk[-1].close,
                     "basis_ts": pk[-1].close_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 })
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort basis snapshot
             pass
 
     if rows:
@@ -229,11 +255,24 @@ def run_cycle(
             f"(refusing to orphan positions silently)."
         )
 
+    # Reconcile any durably-logged funding accruals the last save did not absorb
+    # (a crash between the funding-accrual WAL append and the state save). Replay
+    # is re-fetch-free and idempotent - a no-op on the normal path.
+    if open_positions:
+        recovered, recovered_cash = reconcile_from_ledger(
+            open_positions,
+            _read_jsonl(Path(audit_path).parent / "funding-accruals.jsonl"),
+            now,
+        )
+        if recovered:
+            account.cash += recovered_cash
+            open_positions.update(recovered)
+
     owns_client = client is None
     client = client or BinanceClient()
     audit = ExecutionAudit(audit_path)
     results: list[CandidateResult] = []
-    accrual_rows_committed: list[dict] = []  # funding sidecar: written only after state save
+    accrual_rows_committed: list[dict] = []  # funding-accrual WAL rows (flushed before save)
     today = now.strftime("%Y-%m-%d")
 
     try:
@@ -263,7 +302,7 @@ def run_cycle(
                 if symbol not in funding_cache:
                     try:
                         funding_cache[symbol] = client.funding_rates(symbol, limit=1000)
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - accrual retries next cycle
                         funding_cache[symbol] = []
             accrued, accrual_rows, cash_delta = accrue_open_positions(
                 open_positions, funding_cache, market, latest_price, now
@@ -271,10 +310,11 @@ def run_cycle(
             if accrual_rows:
                 account.cash += cash_delta
                 open_positions.update(accrued)
-                # Defer the sidecar write: these rows are valid only once the
-                # cursor+cash they advance are durably saved. Writing here would
-                # re-accrue and DUPLICATE them if a later step refuses the cycle
-                # (the accrual cursor lives in paper-state.json, saved at the end).
+                # Carry the rows to the commit section, where they are flushed to
+                # the write-ahead ledger just BEFORE the state save. A refusal in
+                # between never reaches that point (nothing written, cursor stays
+                # put -> re-accrued next cycle); a crash mid-save is healed by
+                # reconcile_from_ledger on the next load.
                 accrual_rows_committed = accrual_rows
 
         # Pre-fetch funding for every funding-gated candidate BEFORE any order is
@@ -405,14 +445,15 @@ def run_cycle(
         day_anchor_equity=anchor_equity,
         last_equity=round(equity, 8),
     )
-    store.save(new_state)
-    # Commit the funding-accrual sidecar only now, after the state whose cursor
-    # and cash these rows advance is durably saved - so a refusal earlier in the
-    # cycle leaves neither a stranded nor a duplicated funding record.
+    # Write-ahead the funding-accrual ledger (durably) BEFORE saving state. If the
+    # process dies between the two, reconcile_from_ledger replays the rows on the
+    # next load - so the ledger is never behind the state it feeds.
     if accrual_rows_committed:
         _append_jsonl(
-            Path(audit_path).parent / "funding-accruals.jsonl", accrual_rows_committed
+            Path(audit_path).parent / "funding-accruals.jsonl",
+            accrual_rows_committed, durable=True,
         )
+    store.save(new_state)
 
     return CycleReport(
         cycle_count=new_state.cycle_count,

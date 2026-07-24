@@ -46,7 +46,7 @@ def _fetch_funding(symbol: str) -> dict[str, float | None] | None:
         with BinanceClient() as feed:
             events = feed.funding_rates(perp, limit=90)
         return funding_snapshot([(e.funding_time, e.rate) for e in events])
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - enrichment is non-fatal; skip on provider error
         log.warning("funding enrichment skipped", extra={"symbol": symbol, "error": str(exc)})
         return None
 
@@ -63,7 +63,7 @@ def _fetch_macro(client: OpenBBClient, start: date, end: date) -> dict[str, floa
             closes = [b.close for b in history.bars]
             base = closes[-31] if len(closes) > 30 else closes[0]
             out[name] = round((closes[-1] / base - 1.0) * 100, 2)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - macro enrichment is non-fatal per series
             log.warning("macro enrichment skipped", extra={"series": name, "error": str(exc)})
             out[name] = None
     return out

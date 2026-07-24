@@ -55,7 +55,7 @@ class PriceHistoryCache:
             return None
         try:
             history = PriceHistory.model_validate_json(path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception:  # noqa: BLE001 - unreadable/corrupt cache entry -> treat as miss
             path.unlink(missing_ok=True)
             return None
         if max_age is not None:
