@@ -22,7 +22,7 @@ so the forward-evidence analyzer keeps reading exactly what it always has.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from quant_platform.data.binance_client import FundingEvent
 from quant_platform.execution.state import OpenPosition
@@ -93,3 +93,55 @@ def _bar_closes(entry: tuple[list[Bar], str] | None) -> dict[str, float]:
         return {}
     bars, _interval = entry
     return {bar.date: bar.close for bar in bars}
+
+
+def reconcile_from_ledger(
+    open_positions: dict[tuple[str, str], OpenPosition],
+    ledger_rows: list[dict],
+    now: datetime,
+) -> tuple[dict[tuple[str, str], OpenPosition], float]:
+    """Replay durably-logged accrual rows the persisted state has not absorbed.
+
+    Heals a crash between the funding-accrual write-ahead append and the state
+    save: the row is on disk but the position cursor, ``funding_net`` and cash
+    were never persisted. Only rows strictly newer than each position's cursor
+    (``last_funding_ts`` or ``entry_ts``) and not in the future are replayed, so
+    this is idempotent and needs no re-fetch - the row already carries its own
+    ``cash_delta``. Pure: no I/O. Returns (updated positions by key, cash delta).
+    """
+    rows_by_key: dict[tuple[str, str], list[dict]] = {}
+    for row in ledger_rows:
+        rows_by_key.setdefault((row.get("candidate_id"), row.get("symbol")), []).append(row)
+
+    updated: dict[tuple[str, str], OpenPosition] = {}
+    total_delta = 0.0
+    for key, pos in open_positions.items():
+        rows = rows_by_key.get(key)
+        if not rows:
+            continue
+        cursor = pos.last_funding_ts or pos.entry_ts
+        pending: list[tuple[datetime, float]] = []
+        for row in rows:
+            ts = _parse_funding_ts(row.get("funding_time"))
+            if ts is None or not (cursor < ts <= now):
+                continue
+            pending.append((ts, float(row.get("cash_delta", 0.0))))
+        if not pending:
+            continue
+        pending.sort(key=lambda item: item[0])
+        pos_delta = sum(delta for _, delta in pending)
+        total_delta += pos_delta
+        updated[key] = pos.model_copy(update={
+            "last_funding_ts": pending[-1][0],
+            "funding_net": round(pos.funding_net + pos_delta, 8),
+        })
+    return updated, round(total_delta, 8)
+
+
+def _parse_funding_ts(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None

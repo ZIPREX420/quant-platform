@@ -48,7 +48,7 @@ target-version = "py310"
 # Curated to high-signal, mostly-autofixable families; opinionated/behavioural
 # families (datetime-tz, pyupgrade, flake8-pyi, pylint, bandit) are deliberately
 # not selected and can be adopted later as focused efforts.
-select = ["E4", "E7", "E9", "W", "F", "I", "B", "UP", "SIM", "C4", "RUF"]
+select = ["E4", "E7", "E9", "W", "F", "I", "B", "BLE001", "UP", "SIM", "C4", "RUF"]
 ignore = [
     "UP037",  # keep quoted forward-ref annotations (safe under the py310 target)
 ]
