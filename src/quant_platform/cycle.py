@@ -233,6 +233,7 @@ def run_cycle(
     client = client or BinanceClient()
     audit = ExecutionAudit(audit_path)
     results: list[CandidateResult] = []
+    accrual_rows_committed: list[dict] = []  # funding sidecar: written only after state save
     today = now.strftime("%Y-%m-%d")
 
     try:
@@ -270,9 +271,11 @@ def run_cycle(
             if accrual_rows:
                 account.cash += cash_delta
                 open_positions.update(accrued)
-                _append_jsonl(
-                    Path(audit_path).parent / "funding-accruals.jsonl", accrual_rows
-                )
+                # Defer the sidecar write: these rows are valid only once the
+                # cursor+cash they advance are durably saved. Writing here would
+                # re-accrue and DUPLICATE them if a later step refuses the cycle
+                # (the accrual cursor lives in paper-state.json, saved at the end).
+                accrual_rows_committed = accrual_rows
 
         # Pre-fetch funding for every funding-gated candidate BEFORE any order is
         # processed. A funding-feed failure must refuse the cycle while it is
@@ -403,6 +406,13 @@ def run_cycle(
         last_equity=round(equity, 8),
     )
     store.save(new_state)
+    # Commit the funding-accrual sidecar only now, after the state whose cursor
+    # and cash these rows advance is durably saved - so a refusal earlier in the
+    # cycle leaves neither a stranded nor a duplicated funding record.
+    if accrual_rows_committed:
+        _append_jsonl(
+            Path(audit_path).parent / "funding-accruals.jsonl", accrual_rows_committed
+        )
 
     return CycleReport(
         cycle_count=new_state.cycle_count,
