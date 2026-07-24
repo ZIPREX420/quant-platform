@@ -24,9 +24,9 @@ def resolve_due_outcomes(workspace_root: Path, client=None) -> int | None:
     service is unreachable (resolution simply waits for a cycle when it is
     up). Never fatal: the cycle result must not depend on the desk stack.
     """
-    from quant_platform.cli_outcomes import record_outcomes  # noqa: PLC0415
-    from quant_platform.data.openbb_client import OpenBBClient  # noqa: PLC0415
-    from quant_platform.journal import DecisionJournal  # noqa: PLC0415
+    from quant_platform.cli_outcomes import record_outcomes
+    from quant_platform.data.openbb_client import OpenBBClient
+    from quant_platform.journal import DecisionJournal
 
     journal = DecisionJournal(workspace_root / "reports" / "research" / "journal.jsonl")
     if not journal.pending():
@@ -85,13 +85,13 @@ def main(argv: list[str] | None = None) -> int:
             print("outcomes: skipped (local OpenBB service offline; will retry next cycle)")
         elif resolved:
             print(f"outcomes: {resolved} memo outcome(s) recorded")
-    except Exception as exc:  # noqa: BLE001 - outcome bugs must not fail the cycle
+    except Exception as exc:
         print(f"WARNING: outcome resolution failed: {exc}", file=sys.stderr)
     try:  # refresh the operator dashboard; never fail the cycle over rendering
-        from quant_platform.cli_dashboard import generate  # noqa: PLC0415
+        from quant_platform.cli_dashboard import generate
         generate(root, ws, ws / "reports" / "dashboard.html")
         print(f"dashboard: {ws / 'reports' / 'dashboard.html'}")
-    except Exception as exc:  # noqa: BLE001 - cycle result must survive dashboard bugs
+    except Exception as exc:
         print(f"WARNING: dashboard render failed: {exc}", file=sys.stderr)
     for r in report.results:
         marker = "" if r.approved is None else (" [approved]" if r.approved else " [REJECTED]")

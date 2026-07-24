@@ -59,6 +59,7 @@ class TestSchemaV12ForwardEvidence:
         import hashlib
         import json
         from pathlib import Path
+
         from quant_platform.strategies.loader import load_strategy
         repo = Path(__file__).resolve().parents[2]
         ws = tmp_path / "ws"
@@ -81,8 +82,10 @@ class TestSchemaV12ForwardEvidence:
 
     def test_unknown_report_type_refused(self, tmp_path):
         import json
-        import pytest
         from pathlib import Path
+
+        import pytest
+
         from quant_platform.strategies.loader import StrategyLoadError, load_strategy
         repo = Path(__file__).resolve().parents[2]
         definition = json.loads(

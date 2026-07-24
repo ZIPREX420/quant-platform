@@ -1,7 +1,13 @@
 """validation module: CSV auto-detection, metrics math, Monte Carlo determinism."""
 import pytest
 
-from quant_platform.validation import Trade, TradeListError, load_trades_csv, monte_carlo, trade_metrics
+from quant_platform.validation import (
+    Trade,
+    TradeListError,
+    load_trades_csv,
+    monte_carlo,
+    trade_metrics,
+)
 from quant_platform.validation.analysis import sharpe_like
 
 

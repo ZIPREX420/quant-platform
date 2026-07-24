@@ -205,6 +205,7 @@ class TestOutcomeLoopIntegration:
 
     def test_due_outcome_recorded_via_mock_service(self, tmp_path):
         import httpx
+
         from quant_platform.cli_cycle import resolve_due_outcomes
         from quant_platform.data.openbb_client import OpenBBClient
 
@@ -230,6 +231,7 @@ class TestOutcomeLoopIntegration:
 
     def test_offline_service_returns_none(self, tmp_path):
         import httpx
+
         from quant_platform.cli_cycle import resolve_due_outcomes
         from quant_platform.data.openbb_client import OpenBBClient
 
@@ -250,6 +252,7 @@ class TestMarketStructureRecorder:
     @staticmethod
     def rich_fake(ohlc, oi_hours=3):
         from datetime import timedelta
+
         from quant_platform.data.binance_client import OpenInterestPoint, PremiumBar
 
         class RichFake(FakeClient):

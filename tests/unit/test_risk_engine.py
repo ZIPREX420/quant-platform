@@ -68,7 +68,7 @@ class TestKillSwitch:
         pf = portfolio(equity=9_700, sod=10_000)  # -3% day vs 2% cap
         d = engine().evaluate(order(100), pf)
         assert not d.approved
-        assert any("daily_loss_kill_switch" == c.name and not c.passed for c in d.checks)
+        assert any(c.name == "daily_loss_kill_switch" and not c.passed for c in d.checks)
 
     def test_daily_loss_allows_reducing_orders(self):
         pf = portfolio(equity=9_700, sod=10_000, positions={"BTC-USD": 400})

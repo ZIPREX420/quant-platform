@@ -26,6 +26,7 @@ from quant_platform.signals.rules import (  # noqa: F401 - re-exported for compa
 )
 from quant_platform.validation.trades import Trade
 
+
 @dataclass(frozen=True)
 class BacktestTrade:
     entry_date: str

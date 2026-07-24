@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from quant_platform.strategies import LoadedStrategy, StrategyLoadError, load_strategy, load_strategy_dir
+from quant_platform.strategies import (
+    LoadedStrategy,
+    StrategyLoadError,
+    load_strategy,
+    load_strategy_dir,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLE = REPO / "config/strategies/example-btc-trend.json"
