@@ -274,6 +274,22 @@ def run_cycle(
                     Path(audit_path).parent / "funding-accruals.jsonl", accrual_rows
                 )
 
+        # Pre-fetch funding for every funding-gated candidate BEFORE any order is
+        # processed. A funding-feed failure must refuse the cycle while it is
+        # still a clean no-op: fetching lazily inside the trading loop below could
+        # raise AFTER an earlier candidate's fill was already appended to the
+        # (append-only) audit, leaving the audit ahead of the never-saved state.
+        # Mirrors the up-front klines fetch; same fail-closed contract. Symbols
+        # already attempted during accrual are reused as-is (including a
+        # best-effort empty list), so accrual's retry-next-cycle behaviour stands.
+        for candidate in candidates:
+            if not _rules_use_funding(candidate.definition["signal"]):
+                continue
+            fsymbols, _ffreq, _flimit = _candidate_symbols_and_dep(candidate)
+            for symbol in fsymbols:
+                if symbol not in funding_cache:
+                    funding_cache[symbol] = client.funding_rates(symbol, limit=1000)
+
         # daily kill-switch anchor: reset at UTC day rollover
         anchor_date, anchor_equity = state.day_anchor_date, state.day_anchor_equity
         if anchor_date != today or anchor_equity is None:
@@ -283,8 +299,8 @@ def run_cycle(
           for symbol in symbols:
             bars, _ = market[symbol]
             if _rules_use_funding(candidate.definition["signal"]):
-                if symbol not in funding_cache:
-                    funding_cache[symbol] = client.funding_rates(symbol, limit=1000)
+                # funding was pre-fetched up front (see the pre-trade pass above),
+                # so the cache is guaranteed populated for every funding-gated symbol.
                 bars = attach_funding(
                     bars,
                     [(e.funding_time.strftime("%Y-%m-%dT%H:%M"), e.rate)
