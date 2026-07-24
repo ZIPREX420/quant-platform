@@ -60,6 +60,7 @@ def test_no_sma200_below_200_bars():
 class TestM10Enrichment:
     def test_funding_snapshot_math(self):
         from datetime import datetime, timedelta, timezone
+
         from quant_platform.data.context import funding_snapshot
         t0 = datetime(2026, 7, 1, tzinfo=timezone.utc)
         events = [(t0 + timedelta(hours=8 * i), 0.0001) for i in range(90)]
@@ -68,6 +69,7 @@ class TestM10Enrichment:
 
     def test_funding_snapshot_insufficient_events(self):
         from datetime import datetime, timezone
+
         from quant_platform.data.context import funding_snapshot
         t0 = datetime(2026, 7, 1, tzinfo=timezone.utc)
         snap = funding_snapshot([(t0, -0.0002)])
@@ -87,6 +89,7 @@ class TestM10Enrichment:
     def test_context_backward_compatible_without_enrichment(self, tmp_path):
         # pre-M10 journal records have no funding/macro keys - must still validate
         import json
+
         from quant_platform.data.context import MarketContext
         old = {
             "symbol": "BTC-USD", "as_of": "2026-07-01", "source": "t", "stale_days": 0,

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from quant_platform.validation.backtest import Bar, BacktestTrade, run_backtest
+from quant_platform.validation.backtest import BacktestTrade, Bar, run_backtest
 
 
 @dataclass(frozen=True)

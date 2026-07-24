@@ -87,6 +87,7 @@ class TestShortBacktest:
 
     def test_unknown_direction_refused(self):
         import pytest as _pytest
+
         from quant_platform.signals.rules import RuleError
         bad = signal("long")
         bad["direction"] = "sideways"
@@ -109,10 +110,10 @@ class TestShortEvaluator:
 
 class TestShortCycleEndToEnd:
     def test_short_lifecycle_via_cycle(self, tmp_path):
-        from tests.unit.test_cycle import FakeClient, flat, paths, write_candidate
         from quant_platform.cycle import run_cycle
         from quant_platform.execution.session import ExecutionAudit
         from quant_platform.execution.state import StateStore
+        from tests.unit.test_cycle import FakeClient, flat, paths, write_candidate
 
         cands, state_path, audit_path = paths(tmp_path)
         write_candidate(cands)

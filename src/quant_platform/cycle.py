@@ -18,9 +18,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from quant_platform.data.binance_client import BinanceClient, KlineBar
+from quant_platform.execution.funding import accrue_open_positions
 from quant_platform.execution.paper import PaperAccount
 from quant_platform.execution.session import ExecutionAudit, PaperTradingSession
-from quant_platform.execution.funding import accrue_open_positions
 from quant_platform.execution.state import OpenPosition, PaperState, StateStore
 from quant_platform.risk.engine import CheckResult, Side
 from quant_platform.signals.evaluator import attach_funding, evaluate_candidate
@@ -74,7 +74,7 @@ def _vol_scale(bars: list[Bar], interval: str, vol_target_annual_pct: float | No
     if len(closes) < 11:
         return 1.0
     rets = [closes[i] / closes[i - 1] - 1.0 for i in range(1, len(closes))]
-    from statistics import pstdev  # noqa: PLC0415
+    from statistics import pstdev
     per_year = (365 * 86400) / INTERVAL_SECONDS[interval]
     realized = pstdev(rets) * (per_year ** 0.5) * 100.0
     if realized <= 0:
@@ -133,7 +133,7 @@ def _candidate_symbols_and_dep(candidate: LoadedCandidate) -> tuple[list[str], s
 
 def _append_jsonl(path: Path, rows: list[dict]) -> None:
     """Append rows to a JSONL sidecar (mkdir on first write)."""
-    import json as _json  # noqa: PLC0415
+    import json as _json
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
@@ -154,7 +154,7 @@ def _record_market_structure(client, symbols, path: Path, now: datetime) -> int:
     at the venue, so only its latest closed value is snapshotted. Best-effort:
     never affects the cycle result. Returns rows written.
     """
-    import json as _json  # noqa: PLC0415
+    import json as _json
 
     cursor_path = path.with_suffix(".cursor.json")
     try:
@@ -177,7 +177,7 @@ def _record_market_structure(client, symbols, path: Path, now: datetime) -> int:
                 })
                 last_seen = oi_ts
             cursors[symbol] = last_seen
-        except Exception:  # noqa: BLE001 - forward recording is best-effort
+        except Exception:
             pass
         try:
             pk = client.premium_index_klines(symbol, "1h", limit=2, now=now)
@@ -187,7 +187,7 @@ def _record_market_structure(client, symbols, path: Path, now: datetime) -> int:
                     "basis_close": pk[-1].close,
                     "basis_ts": pk[-1].close_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 })
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     if rows:
@@ -263,7 +263,7 @@ def run_cycle(
                 if symbol not in funding_cache:
                     try:
                         funding_cache[symbol] = client.funding_rates(symbol, limit=1000)
-                    except Exception:  # noqa: BLE001 - accrual retries next cycle
+                    except Exception:
                         funding_cache[symbol] = []
             accrued, accrual_rows, cash_delta = accrue_open_positions(
                 open_positions, funding_cache, market, latest_price, now
