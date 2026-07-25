@@ -87,13 +87,21 @@ class PaperState(BaseModel):
         day_anchor_equity: float | None = None,
         last_equity: float | None = None,
     ) -> "PaperState":
-        # engine metadata and account book must agree - refuse divergence
+        # Engine metadata and the account book must agree - refuse divergence.
+        # A symbol may be held by MORE THAN ONE candidate (each carries its own
+        # OpenPosition), while the book stores a single NET holding per symbol.
+        # Validate the per-symbol signed SUM, not each position individually -
+        # otherwise a long and a short candidate on the same symbol (which net in
+        # the book) each fail against the net and wedge every cycle at save.
+        expected_by_symbol: dict[str, float] = {}
         for pos in open_positions:
-            held = account.positions.get(pos.symbol, 0.0)
-            expected = pos.quantity if pos.direction == "long" else -pos.quantity
+            signed = pos.quantity if pos.direction == "long" else -pos.quantity
+            expected_by_symbol[pos.symbol] = expected_by_symbol.get(pos.symbol, 0.0) + signed
+        for symbol, expected in expected_by_symbol.items():
+            held = account.positions.get(symbol, 0.0)
             if abs(held - expected) > 1e-9:
                 raise StateError(
-                    f"open-position metadata for {pos.symbol} ({pos.direction} {pos.quantity}) does not "
+                    f"open-position metadata for {symbol} (net {expected}) does not "
                     f"match account book ({held}) - refusing to persist inconsistent state"
                 )
         return cls(
