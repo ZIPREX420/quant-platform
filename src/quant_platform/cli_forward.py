@@ -16,6 +16,20 @@ from quant_platform.strategies.candidates import CandidateLoadError, load_candid
 from quant_platform.validation.forward import ForwardRecordError, assess
 
 
+def _load_jsonl(path: Path) -> list[dict]:
+    import json
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+    return rows
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="quant-forward", description=__doc__)
     parser.add_argument("candidate_id", nargs="?", default=None,
@@ -26,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     root = args.repo_root or find_workspace_root(Path.cwd().resolve())
     ws = root.parents[1] if root.parent.name == "repositories" else root
     records = ExecutionAudit(ws / "reports" / "research" / "executions.jsonl").records()
+    equity_history = _load_jsonl(ws / "reports" / "research" / "equity-history.jsonl")
 
     try:
         candidates = load_candidate_dir(root / "config" / "candidates")
@@ -44,13 +59,14 @@ def main(argv: list[str] | None = None) -> int:
         print("no candidates registered (config/candidates/)")
         return 0
     for cid in ids:
+        candidate = next(c for c in candidates if c.id == cid)
         try:
-            print(assess(records, cid).summary())
+            print(assess(records, cid, equity_history=equity_history,
+                         definition=candidate.definition).summary())
         except ForwardRecordError as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 1
-        candidate = next(c for c in candidates if c.id == cid)
-        print(f"  prediction: {candidate.prediction}\n")
+        print()
     return 0
 
 
