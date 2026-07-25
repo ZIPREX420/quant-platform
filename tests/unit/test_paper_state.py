@@ -71,3 +71,36 @@ def test_save_is_atomic_no_tmp_left(tmp_path):
     store.save(PaperState.fresh(10_000.0))
     leftovers = [p.name for p in tmp_path.iterdir()]
     assert leftovers == ["paper-state.json"]
+
+
+def test_two_candidates_netting_on_one_symbol_persists():
+    # A long and a short candidate on the same symbol net in the single account
+    # book; from_account must validate the per-symbol SUM, not each position.
+    account = PaperAccount(starting_cash=10_000.0)
+    account.positions = {"SOLUSDT": -0.5}  # long 6.0 + short 6.5 -> net -0.5
+    long_pos = OpenPosition(
+        candidate_id="sol-carry", symbol="SOLUSDT", direction="long", quantity=6.0,
+        entry_price=75.0, entry_ts=datetime.now(timezone.utc), stop_price=70.0,
+        entry_fill_id="a" * 12,
+    )
+    short_pos = OpenPosition(
+        candidate_id="trend-short", symbol="SOLUSDT", direction="short", quantity=6.5,
+        entry_price=76.0, entry_ts=datetime.now(timezone.utc), stop_price=80.0,
+        entry_fill_id="b" * 12,
+    )
+    state = PaperState.from_account(account, (long_pos, short_pos), cycle_count=42)
+    assert state.cycle_count == 42
+    assert {p.candidate_id for p in state.open_positions} == {"sol-carry", "trend-short"}
+
+
+def test_genuine_symbol_divergence_still_refused():
+    # net of metadata (+6.0) must still match the book (+3.0), else refuse
+    account = PaperAccount(starting_cash=10_000.0)
+    account.positions = {"SOLUSDT": 3.0}
+    pos = OpenPosition(
+        candidate_id="sol-carry", symbol="SOLUSDT", direction="long", quantity=6.0,
+        entry_price=75.0, entry_ts=datetime.now(timezone.utc), stop_price=70.0,
+        entry_fill_id="a" * 12,
+    )
+    with pytest.raises(StateError, match="does not match account book"):
+        PaperState.from_account(account, (pos,), cycle_count=1)
