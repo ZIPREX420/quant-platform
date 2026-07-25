@@ -1,21 +1,33 @@
 """Forward-record analyzer (protocol v2 addendum): the paper audit as evidence.
 
 Reconstructs completed round trips per candidate from executions.jsonl and
-measures them against the pre-registered thresholds F1-F5 of
-docs/validation/validation-protocol-v2-forward.md. Evidence is computed
-from records, never assembled by hand; a forward-evidence report must embed
-this tool's output verbatim.
+measures them against the pre-registered thresholds of
+docs/validation/validation-protocol-v2-forward.md. Evidence is computed from
+records, never assembled by hand; a forward-evidence report must embed this
+tool's output verbatim.
+
+Coverage of F1-F7 (per the report template's Results table):
+- F1 duration, F2 round trips, F3 net+PF, F5 Monte-Carlo p05  -> machine-decided
+  from the round-trip series;
+- F4 kill-switch breaches (=0)                                -> machine-decided
+  from the per-cycle equity curve vs the definition's max_daily_loss_pct;
+- F6 window integrity (no unexplained cycle gaps)             -> machine-decided
+  from the equity-history cycle sequence.
+The remaining pieces are inherently human attestations and are SURFACED, never
+auto-passed: F4 "max drawdown within declared caps" (the schema declares no
+drawdown cap), F6 "state file never manually repaired", and F7 prediction
+review. `qualifies()` therefore means "every machine-decidable criterion
+passes"; a forward-evidence report additionally records the three attestations.
 
 Round-trip semantics: fills for one candidate are consumed in order; a trip
 opens on the first fill from flat (BUY = long trip, SELL = short trip, M12)
-and completes when the position returns to flat (partial closes aggregate
-into the same trip). Net return per trip is measured on the ENTRY leg's
-notional: long = (proceeds - cost) / cost; short = (proceeds - cost) /
-proceeds - exactly what the paper account experienced, costs included.
+and completes when the position returns to flat (partial closes aggregate into
+the same trip). Net return per trip is measured on the ENTRY leg's notional.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from quant_platform.execution.session import AuditRecord
@@ -66,9 +78,14 @@ class ForwardAssessment:
     profit_factor: float | None
     max_drawdown_pct: float | None
     mc_p05_terminal_return_pct: float | None
-    criteria: dict[str, bool | None]  # F1..F5; None = not yet measurable
+    criteria: dict[str, bool | None]  # machine-decidable; None = not yet measurable
+    kill_switch_breach_days: int | None = None
+    integrity_notes: list[str] = field(default_factory=list)
+    prediction: str | None = None
 
     def qualifies(self) -> bool:
+        """All MACHINE-decidable criteria pass. A forward-evidence report also
+        needs the surfaced human attestations (F4 caps, F6 no-repair, F7)."""
         return all(v is True for v in self.criteria.values())
 
     def summary(self) -> str:
@@ -90,13 +107,25 @@ class ForwardAssessment:
             )
         if self.mc_p05_terminal_return_pct is not None:
             lines.append(f"  MC p05 terminal return: {self.mc_p05_terminal_return_pct:+.2f}%")
+        if self.kill_switch_breach_days is not None:
+            lines.append(f"  kill-switch breach days: {self.kill_switch_breach_days}")
         for name, value in self.criteria.items():
             verdict = "PASS" if value is True else ("fail" if value is False else "not yet measurable")
             lines.append(f"  {name}: {verdict}")
+        for note in self.integrity_notes:
+            lines.append(f"  F6 integrity note: {note}")
         lines.append(
-            "  QUALIFIES for a forward-evidence report" if self.qualifies()
+            "  QUALIFIES on machine criteria - human attestations still required "
+            "(F4 drawdown-vs-caps, F6 'state never manually repaired', F7 prediction)"
+            if self.qualifies()
             else "  does not (yet) qualify - thresholds are pre-registered and fixed"
         )
+        lines.append(
+            "  F4 max drawdown vs declared caps: HUMAN REVIEW (no drawdown cap in the "
+            f"risk schema; measured max drawdown {self.max_drawdown_pct if self.max_drawdown_pct is not None else 'n/a'}%)"
+        )
+        if self.prediction:
+            lines.append(f"  F7 prediction review (HUMAN, compare to outcome): {self.prediction}")
         return "\n".join(lines)
 
 
@@ -165,8 +194,78 @@ def _round_trips_one_symbol(
     return trips, opened_at is not None
 
 
-def assess(records: list[AuditRecord], candidate_id: str) -> ForwardAssessment:
-    """Measure one candidate's paper record against the F1-F5 thresholds."""
+def _parse_ts(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _window_rows(
+    equity_history: list[dict], first: datetime, last: datetime
+) -> list[dict]:
+    """Per-cycle equity marks whose timestamp lies within [first, last]."""
+    rows = []
+    for r in equity_history:
+        ts = _parse_ts(r.get("ts", ""))
+        if ts is not None and first <= ts <= last:
+            rows.append(r)
+    return rows
+
+
+def _kill_switch_breach_days(rows: list[dict], max_daily_loss_pct: float) -> int:
+    """UTC days in which account equity fell at least max_daily_loss_pct below
+    that day's opening mark - a faithful replay of the live (account-level)
+    daily-loss kill switch. Rows must be chronological (append-only)."""
+    by_day: dict[str, list[float]] = {}
+    for r in rows:
+        by_day.setdefault(str(r.get("ts", ""))[:10], []).append(float(r.get("equity", 0.0)))
+    breaches = 0
+    for equities in by_day.values():
+        anchor = equities[0]
+        if anchor <= 0:
+            continue
+        worst_pct = min((e - anchor) / anchor for e in equities) * 100.0
+        if worst_pct <= -max_daily_loss_pct:
+            breaches += 1
+    return breaches
+
+
+def _integrity(rows: list[dict]) -> tuple[bool, list[str]]:
+    """F6 core: the per-cycle equity marks in the window must be a contiguous,
+    duplicate-free run of cycle numbers. A gap = a cycle that never recorded a
+    mark (a silent stop or a hand-removed record); a duplicate = corruption.
+    This would have flagged the 2026-07-24/25 stuck-cycle window automatically."""
+    cycles = [int(r["cycle"]) for r in rows if "cycle" in r]
+    if not cycles:
+        return False, ["no per-cycle equity marks in the evidence window"]
+    counts = Counter(cycles)
+    notes: list[str] = []
+    dupes = sorted(c for c, n in counts.items() if n > 1)
+    if dupes:
+        notes.append(f"duplicate cycle marks: {dupes}")
+    uniq = sorted(counts)
+    missing = (uniq[-1] - uniq[0] + 1) - len(uniq)
+    if missing > 0:
+        notes.append(
+            f"{missing} missing cycle mark(s) in window (cycles {uniq[0]}..{uniq[-1]}) "
+            "- unexplained gap; explain or disclose before an F6 pass"
+        )
+    return (not notes), notes
+
+
+def assess(
+    records: list[AuditRecord],
+    candidate_id: str,
+    equity_history: list[dict] | None = None,
+    definition: dict | None = None,
+) -> ForwardAssessment:
+    """Measure one candidate's paper record against F1-F6.
+
+    equity_history (per-cycle marks) and the candidate definition are optional;
+    without them F4 (kill switch) and F6 (integrity) are 'not yet measurable'
+    rather than passing - the tool never asserts a criterion it cannot check.
+    """
     trips, open_position = round_trips_for(records, candidate_id)
     fills = [r.ts for r in records
              if r.strategy_id == candidate_id and r.tier == "candidate" and r.fill]
@@ -178,9 +277,25 @@ def assess(records: list[AuditRecord], candidate_id: str) -> ForwardAssessment:
         metrics = trade_metrics([t.as_trade() for t in trips])
         total, pf, maxdd = metrics.total_return_pct, metrics.profit_factor, metrics.max_drawdown_pct
     if len(trips) >= 10:
-        p05 = monte_carlo(
-            [t.as_trade() for t in trips], runs=MC_RUNS
-        ).terminal_return_pct_p05
+        p05 = monte_carlo([t.as_trade() for t in trips], runs=MC_RUNS).terminal_return_pct_p05
+
+    # F4 (kill switch) + F6 (integrity) require the per-cycle equity marks.
+    kill_breaches: int | None = None
+    f4_kill: bool | None = None
+    f6_integrity: bool | None = None
+    integrity_notes: list[str] = []
+    max_daily_loss = (definition or {}).get("risk", {}).get("max_daily_loss_pct")
+    if equity_history and first and last:
+        rows = _window_rows(equity_history, first, last)
+        if rows:
+            f6_integrity, integrity_notes = _integrity(rows)
+            if max_daily_loss is not None:
+                kill_breaches = _kill_switch_breach_days(rows, max_daily_loss)
+                f4_kill = kill_breaches == 0
+            else:
+                f4_kill = True  # no daily-loss cap declared -> no kill switch to breach
+
+    prediction = (definition or {}).get("tracking", {}).get("prediction")
 
     criteria: dict[str, bool | None] = {
         "F1_duration_180d": days >= MIN_DAYS if fills else None,
@@ -188,7 +303,9 @@ def assess(records: list[AuditRecord], candidate_id: str) -> ForwardAssessment:
         "F3_net_positive_pf": (
             (total > 0 and (pf is None or pf >= MIN_PROFIT_FACTOR)) if trips else None
         ),
+        "F4_kill_switch_clean": f4_kill,
         "F5_mc_p05_positive": (p05 > 0.0) if p05 is not None else None,
+        "F6_integrity_no_gaps": f6_integrity,
     }
     return ForwardAssessment(
         candidate_id=candidate_id,
@@ -202,4 +319,7 @@ def assess(records: list[AuditRecord], candidate_id: str) -> ForwardAssessment:
         max_drawdown_pct=round(maxdd, 2) if maxdd is not None else None,
         mc_p05_terminal_return_pct=round(p05, 2) if p05 is not None else None,
         criteria=criteria,
+        kill_switch_breach_days=kill_breaches,
+        integrity_notes=integrity_notes,
+        prediction=prediction,
     )

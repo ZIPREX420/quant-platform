@@ -108,11 +108,15 @@ class TestAssessment:
         for i in range(120):
             exit_price = 103.0 if i % 5 else 96.0  # mostly wins, some losses
             records += trip("c1", day=i * 200 // 120, entry=100.0, exit_=exit_price)
-        a = assess(records, "c1")
+        eq = [{"ts": (T0 + timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+               "cycle": d + 1, "equity": 10_000.0 + d} for d in range(201)]
+        defn = {"risk": {"max_daily_loss_pct": 5}, "tracking": {"prediction": "wins net"}}
+        a = assess(records, "c1", equity_history=eq, definition=defn)
         assert a.round_trips == 120 and a.evidence_days >= 180
         assert a.criteria["F1_duration_180d"] and a.criteria["F2_round_trips_100"]
         assert a.criteria["F3_net_positive_pf"] and a.criteria["F5_mc_p05_positive"]
-        assert a.qualifies()
+        assert a.criteria["F4_kill_switch_clean"] and a.criteria["F6_integrity_no_gaps"]
+        assert a.kill_switch_breach_days == 0 and a.qualifies()
         assert "QUALIFIES" in a.summary()
 
     def test_losing_record_fails_f3(self):
@@ -130,3 +134,52 @@ class TestAssessment:
         assert a.criteria["F2_round_trips_100"] is False
         assert a.criteria["F5_mc_p05_positive"] is None  # <10 trips: no MC yet
         assert not a.qualifies()
+
+
+class TestF4F6F7:
+    """kill switch (F4), window integrity (F6), prediction surfacing (F7)."""
+
+    def _profitable_120(self):
+        records = []
+        for i in range(120):
+            exit_price = 103.0 if i % 5 else 96.0
+            records += trip("c1", day=i * 200 // 120, entry=100.0, exit_=exit_price)
+        return records
+
+    def _gapless_equity(self, n=201):
+        return [{"ts": (T0 + timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                 "cycle": d + 1, "equity": 10_000.0 + d} for d in range(n)]
+
+    def test_no_equity_history_leaves_f4_f6_unmeasurable(self):
+        a = assess(self._profitable_120(), "c1")
+        assert a.criteria["F4_kill_switch_clean"] is None
+        assert a.criteria["F6_integrity_no_gaps"] is None
+        assert not a.qualifies()
+
+    def test_kill_switch_breach_fails_f4(self):
+        eq = self._gapless_equity()
+        eq.insert(11, {"ts": (T0 + timedelta(days=10, hours=12)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                       "cycle": 0, "equity": 10_010.0 * 0.90})  # -10% intraday, same day
+        for k, r in enumerate(eq):
+            r["cycle"] = k + 1  # renumber contiguous so F6 stays clean, isolating F4
+        a = assess(self._profitable_120(), "c1", equity_history=eq,
+                   definition={"risk": {"max_daily_loss_pct": 5}})
+        assert a.criteria["F4_kill_switch_clean"] is False
+        assert a.kill_switch_breach_days >= 1 and not a.qualifies()
+
+    def test_cycle_gap_fails_f6_integrity(self):
+        eq = self._gapless_equity()
+        del eq[50]  # a missing cycle mark inside the window
+        a = assess(self._profitable_120(), "c1", equity_history=eq,
+                   definition={"risk": {"max_daily_loss_pct": 5}})
+        assert a.criteria["F6_integrity_no_gaps"] is False
+        assert any("missing cycle" in n for n in a.integrity_notes)
+        assert not a.qualifies()
+
+    def test_prediction_surfaced_for_f7(self):
+        defn = {"risk": {"max_daily_loss_pct": 5},
+                "tracking": {"prediction": "loses per symbol (falsification tracker)"}}
+        a = assess(self._profitable_120(), "c1",
+                   equity_history=self._gapless_equity(), definition=defn)
+        assert a.prediction == "loses per symbol (falsification tracker)"
+        assert "F7 prediction review" in a.summary() and "falsification tracker" in a.summary()
