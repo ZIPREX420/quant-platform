@@ -58,16 +58,21 @@ def main(argv: list[str] | None = None) -> int:
     if not ids:
         print("no candidates registered (config/candidates/)")
         return 0
+    had_error = False
     for cid in ids:
         candidate = next(c for c in candidates if c.id == cid)
         try:
             print(assess(records, cid, equity_history=equity_history,
                          definition=candidate.definition).summary())
         except ForwardRecordError as exc:
-            print(f"REFUSED: {exc}", file=sys.stderr)
-            return 1
+            # Isolate per candidate: one unreconstructable book must not blind the
+            # rest of the report. Surface it clearly and keep going; the non-zero
+            # exit still signals that at least one candidate needs attention.
+            print(f"forward record: {cid}\n  UNRECONSTRUCTABLE - {exc}")
+            print(f"REFUSED [{cid}]: {exc}", file=sys.stderr)
+            had_error = True
         print()
-    return 0
+    return 1 if had_error else 0
 
 
 if __name__ == "__main__":

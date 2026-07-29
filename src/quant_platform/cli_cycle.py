@@ -13,7 +13,10 @@ from pathlib import Path
 
 from quant_platform.cycle import CycleError, run_cycle
 from quant_platform.data.binance_client import BinanceClientError
-from quant_platform.execution.state import StateError
+from quant_platform.execution.cyclelock import CycleLockBusy, cycle_lock
+from quant_platform.execution.reconcile import book_divergences
+from quant_platform.execution.session import ExecutionAudit
+from quant_platform.execution.state import StateError, StateStore
 from quant_platform.strategies.candidates import CandidateLoadError
 
 
@@ -68,12 +71,42 @@ def main(argv: list[str] | None = None) -> int:
     reports = ws / "reports" / "research"
 
     try:
-        report = run_cycle(
-            candidates_dir=candidates_dir,
-            state_path=reports / "paper-state.json",
-            audit_path=reports / "executions.jsonl",
-            starting_cash=args.starting_cash,
-        )
+        # Integrity guard (production boundary): the persisted book must equal the
+        # durable audit's net per symbol. A mismatch means a past cycle's fill
+        # reached the append-only executions.jsonl but its state save was lost (a
+        # concurrent clobber - now prevented by the lock below - or a crash
+        # mid-cycle). Refuse rather than trade on a book that disagrees with the
+        # audit; rebuild explicitly with quant-reconcile-state. run_cycle stays a
+        # pure function, so unit tests that seed state directly are unaffected.
+        persisted = StateStore(reports / "paper-state.json").load()
+        if persisted is not None:
+            divs = book_divergences(
+                persisted.restore_account().positions,
+                ExecutionAudit(reports / "executions.jsonl").records(),
+            )
+            if divs:
+                print(
+                    "CYCLE-REFUSED: paper state disagrees with the execution audit ("
+                    + "; ".join(divs) + ") - a fill is in executions.jsonl but not in "
+                    "paper-state.json. Run `quant-reconcile-state` to review, then "
+                    "`quant-reconcile-state --apply`, then re-run the cycle.",
+                    file=sys.stderr,
+                )
+                return 1
+        # Serialise cycles: a manual run overlapping the scheduled one would both
+        # load the same state and both save, silently dropping one run's update
+        # (its fill survives only in the append-only audit). The lock makes that
+        # race impossible; a concurrent run refuses cleanly and the scheduler retries.
+        with cycle_lock(reports / "paper-state.json"):
+            report = run_cycle(
+                candidates_dir=candidates_dir,
+                state_path=reports / "paper-state.json",
+                audit_path=reports / "executions.jsonl",
+                starting_cash=args.starting_cash,
+            )
+    except CycleLockBusy as exc:
+        print(f"CYCLE-REFUSED: {exc}", file=sys.stderr)
+        return 1
     except (CycleError, StateError, CandidateLoadError, BinanceClientError) as exc:
         print(f"CYCLE-REFUSED: {exc}", file=sys.stderr)
         return 1
