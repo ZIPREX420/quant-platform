@@ -151,46 +151,81 @@ def round_trips_for(records: list[AuditRecord], candidate_id: str) -> tuple[list
     return trips, any_open
 
 
+_DUST = 1e-6  # |position| below this is flat (accumulated fill-rounding tolerance)
+
+
 def _round_trips_one_symbol(
     fills: list[AuditRecord], candidate_id: str
 ) -> tuple[list[RoundTrip], bool]:
+    """Reconstruct flat-to-flat round trips for one candidate+symbol.
+
+    Handles a genuine direction flip: a fill that carries the position THROUGH
+    zero closes the current trip (with the units that reach flat) and opens the
+    opposite-direction trip with the excess - so a long sold through flat becomes
+    a short, exactly as a funding-carry candidate legitimately trades. A fill that
+    lands within _DUST of flat closes cleanly (accumulated fill rounding, not a
+    new trip). BUY units accrue to ``cost`` (notional + fee), SELL units to
+    ``proceeds`` (notional - fee); ``direction`` selects the return formula. The
+    unused ``candidate_id`` stamps each RoundTrip.
+    """
     trips: list[RoundTrip] = []
-    position = 0.0  # signed: positive long, negative short
-    cost = proceeds = 0.0
+    position = 0.0            # signed units of the open trip (0 = flat)
+    cost = proceeds = 0.0     # accumulators for the open trip
     opened_at: datetime | None = None
     symbol = ""
     direction = "long"
+
+    def accrue(units: float, price: float, fee_per_unit: float, is_buy: bool) -> None:
+        nonlocal cost, proceeds
+        if is_buy:
+            cost += units * price + units * fee_per_unit
+        else:
+            proceeds += units * price - units * fee_per_unit
+
+    def close(closed_at: datetime) -> None:
+        nonlocal position, cost, proceeds, opened_at
+        if opened_at is not None and cost > 0 and proceeds > 0:
+            trips.append(RoundTrip(
+                candidate_id=candidate_id, symbol=symbol, opened_at=opened_at,
+                closed_at=closed_at, cost=cost, proceeds=proceeds, direction=direction,
+            ))
+        position, cost, proceeds, opened_at = 0.0, 0.0, 0.0, None
+
     for r in fills:
         f = r.fill
-        flat = opened_at is None
-        if r.side is Side.BUY:
-            if flat:
-                opened_at, symbol, direction = r.ts, r.symbol, "long"
-            elif direction == "long" and position < -1e-12:
-                raise ForwardRecordError(
-                    f"{candidate_id}: BUY while bookkeeping is inconsistent at {r.ts}"
-                )
-            position += f["quantity"]
-            cost += f["quantity"] * f["fill_price"] + f["fee"]
-        else:
-            if flat:
-                opened_at, symbol, direction = r.ts, r.symbol, "short"
-            elif direction == "long" and position <= 1e-12:
-                raise ForwardRecordError(f"{candidate_id}: SELL without open position at {r.ts}")
-            position -= f["quantity"]
-            proceeds += f["quantity"] * f["fill_price"] - f["fee"]
-        # a close that flips the sign is bookkeeping corruption, not a trip
-        if direction == "long" and position < -1e-10:
-            raise ForwardRecordError(f"{candidate_id}: SELL exceeds long position at {r.ts}")
-        if direction == "short" and position > 1e-10:
-            raise ForwardRecordError(f"{candidate_id}: BUY exceeds short position at {r.ts}")
-        if opened_at is not None and abs(position) <= 1e-10 and (cost > 0 and proceeds > 0):
-            trips.append(RoundTrip(
-                candidate_id=candidate_id, symbol=symbol,
-                opened_at=opened_at, closed_at=r.ts, cost=cost, proceeds=proceeds,
-                direction=direction,
-            ))
-            position, cost, proceeds, opened_at = 0.0, 0.0, 0.0, None
+        qty, price, fee = f["quantity"], f["fill_price"], f["fee"]
+        if qty <= 0:
+            continue
+        is_buy = r.side is Side.BUY
+        fee_per_unit = fee / qty
+        signed = qty if is_buy else -qty
+        new_position = position + signed
+
+        # Flip: the fill carries the position through zero (beyond dust on both
+        # sides). Split it - close the current trip with the units that reach
+        # flat, open the opposite-direction trip with the remainder.
+        if (
+            opened_at is not None
+            and abs(position) > _DUST
+            and position * new_position < 0
+            and abs(new_position) > _DUST
+        ):
+            closing = abs(position)
+            accrue(closing, price, fee_per_unit, is_buy)
+            close(r.ts)
+            opening = qty - closing
+            symbol, direction, opened_at = r.symbol, ("long" if is_buy else "short"), r.ts
+            accrue(opening, price, fee_per_unit, is_buy)
+            position = opening if is_buy else -opening
+            continue
+
+        if opened_at is None:
+            symbol, direction, opened_at = r.symbol, ("long" if is_buy else "short"), r.ts
+        accrue(qty, price, fee_per_unit, is_buy)
+        position = new_position
+        if abs(position) <= _DUST:
+            close(r.ts)
+
     return trips, opened_at is not None
 
 
