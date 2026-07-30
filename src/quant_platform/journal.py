@@ -8,6 +8,7 @@ modeled on TradingAgents' TradingMemoryLog pattern.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,10 +44,20 @@ class OutcomeRecord(BaseModel):
 
 
 def extract_confidence(memo: str) -> str | None:
-    """Pull the LOW/MEDIUM/HIGH rating out of a desk memo, if present."""
-    upper = memo.upper()
+    """Pull the LOW/MEDIUM/HIGH rating out of a desk memo, if present.
+
+    Prefers the canonical machine tag the editor is required to emit as its final
+    line (``CONFIDENCE: <LEVEL>``, tolerant of surrounding markdown/case and a
+    trailing colon variant); the LAST such tag wins, since it is the mandated
+    closer. Falls back to a ``**LEVEL**`` marker (older memo format). Returns None
+    only when no rating is present at all - the caller treats that as a capture
+    gap worth flagging, since the rating is what H4 scores against outcomes.
+    """
+    tags = re.findall(r"CONFIDENCE\s*:?\s*\*{0,2}\s*(LOW|MEDIUM|HIGH)\b", memo, re.IGNORECASE)
+    if tags:
+        return tags[-1].upper()
     for level in ("MEDIUM", "HIGH", "LOW"):  # MEDIUM first: substring-safe order
-        if f"**{level}**" in memo or f"CONFIDENCE: {level}" in upper:
+        if re.search(rf"\*\*\s*{level}\s*\*\*", memo, re.IGNORECASE):
             return level
     return None
 
