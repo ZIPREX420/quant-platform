@@ -118,6 +118,12 @@ def run_desk(
         confidence=extract_confidence(memo),
         usage=graph.usage,
     )
+    if record.confidence is None:
+        log.warning(
+            "memo has no parseable confidence rating - H4 cannot score it; the "
+            "editor must end with a 'CONFIDENCE: LOW|MEDIUM|HIGH' line",
+            extra={"symbol": symbol},
+        )
     record_id = journal.append_memo(record)
 
     out_dir.mkdir(parents=True, exist_ok=True)

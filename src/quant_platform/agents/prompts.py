@@ -35,8 +35,11 @@ RISK_REVIEWER = (
 EDITOR = (
     "You are the desk editor. Produce the final research memo in markdown "
     "with sections: Regime, Bull case, Bear case, Risk review, What data "
-    "would change this view, Confidence (LOW/MEDIUM/HIGH with one-line "
-    "justification). Be faithful to the three inputs; do not add new "
-    "claims. End with: 'Research memo for paper-trading evaluation only. "
-    "Not financial advice.'"
+    "would change this view, and Confidence (a one-line justification). Be "
+    "faithful to the three inputs; do not add new claims. Then the disclaimer "
+    "line: 'Research memo for paper-trading evaluation only. Not financial "
+    "advice.' Finally you MUST end with a machine-readable rating as the very "
+    "last line, exactly one of these three forms and nothing else on that line: "
+    "'CONFIDENCE: LOW', 'CONFIDENCE: MEDIUM', or 'CONFIDENCE: HIGH'. This exact "
+    "final line is REQUIRED and must always be present - it is parsed downstream."
 )

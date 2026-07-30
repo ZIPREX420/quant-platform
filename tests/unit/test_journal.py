@@ -53,6 +53,24 @@ def test_outcome_for_unknown_memo_rejected(tmp_path):
 
 
 def test_extract_confidence():
-    assert extract_confidence("## Confidence\n**MEDIUM** - because") == "MEDIUM"
-    assert extract_confidence("confidence: high overall") == "HIGH"
+    # canonical machine tag (the editor's required final line), tolerant of markdown/case
+    assert extract_confidence("...\n\nCONFIDENCE: HIGH") == "HIGH"
+    assert extract_confidence("CONFIDENCE: **Medium**") == "MEDIUM"
+    assert extract_confidence("blah\nconfidence: low\n") == "LOW"
+    # the LAST tag wins - it is the mandated closing line
+    assert extract_confidence("early confidence high hedge ... \nCONFIDENCE: LOW") == "LOW"
+    # older memo format: a **LEVEL** marker in a Confidence section
+    assert extract_confidence("## Confidence\n\n**MEDIUM** - because") == "MEDIUM"
+    # genuinely absent -> None (the capture-gap the cli warns on)
     assert extract_confidence("no rating here") is None
+    assert extract_confidence("Both cases overstate confidence from thin data") is None
+
+
+def test_editor_prompt_mandates_confidence_tag():
+    """Regression guard: the machine-readable rating instruction must stay in the
+    editor prompt, or memos silently lose the field H4 scores (the sonnet-5 drift)."""
+    from quant_platform.agents.prompts import EDITOR
+
+    assert "CONFIDENCE: LOW" in EDITOR
+    assert "CONFIDENCE: MEDIUM" in EDITOR
+    assert "CONFIDENCE: HIGH" in EDITOR
